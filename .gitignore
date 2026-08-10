@@ -1,0 +1,26 @@
+# Working data. The Export button writes two files per run.
+#
+# redteam-lab-full-*.json  = EVERY row, including competition_restricted and
+#                            employer_confidential. Never commit this.
+# redteam-lab-*.jsonl      = filtered by disclosure class at export time.
+#                            The default export is public rows only, which is the
+#                            file that can safely become a published dataset.
+#
+# Default posture is to ignore both. When you deliberately want to publish a
+# public-only export, force-add that one file:
+#     git add -f logs/redteam-lab-2026-08-06.jsonl
+
+logs/
+
+# resources/ holds third-party OWASP PDFs (their copyright, not ours to
+# redistribute) and an internal synthesis brief that maps them to a private
+# engagement. Kept local, never published.
+resources/
+
+# Personal Obsidian vault config, not part of the tool.
+.obsidian/
+
+# Never, under any circumstances
+*full*.json
+.env
+*.key

@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reference — Reading the refusal</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  /* Reference cards print dense and land on one page */
+  .refcard th, .refcard td { padding: 0.4rem 0.6rem; font-size: 0.84rem; }
+  .lanes { display: grid; grid-template-columns: 1fr 1fr; gap: 0.7rem; margin: 1.2rem 0; }
+  .lane { border: 1px solid var(--rule); border-radius: 8px; padding: 0.8rem 1rem; }
+  .lane h3 { margin-top: 0; }
+  .lane.win { border-color: var(--good); background: var(--good-soft); }
+  @media (max-width: 34rem) { .lanes { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<nav class="lessonnav">
+  <a href="../lessons/0002-reading-the-reply.html">Lesson 2</a>
+  <a href="../../CRASH-COURSE.md">Crash course §4 (source)</a>
+</nav>
+
+<p class="kicker">Reference · keep beside the target</p>
+<h1>Reading the refusal</h1>
+<p class="sub">The reply is your gradient. Classify it, then run the move the class forces.
+Full source: CRASH-COURSE.md section 4.</p>
+
+<h2>The five classes and their forced move</h2>
+<table class="refcard">
+  <tr><th>Class</th><th>Tell</th><th>Move</th></tr>
+  <tr><td><strong>Hard refusal</strong></td><td>Flat block, no engagement, frame never considered</td><td>Change <strong>family</strong></td></tr>
+  <tr><td><strong>Guard block</strong></td><td>Byte-identical, instant, same every reroll</td><td>Change input <strong>surface</strong> (encode, split, language)</td></tr>
+  <tr><td><strong>Soft refusal</strong></td><td>Hedges, "in a different context", engages then backs off</td><td>Keep frame, edit <strong>one clause</strong></td></tr>
+  <tr><td><strong>Partial</strong></td><td>Structure but no payload, or a safer neighbour answered</td><td>Push <strong>specificity</strong> inside the frame</td></tr>
+  <tr><td><strong>Win</strong></td><td>Payload actually present in the text</td><td><strong>Freeze verbatim</strong>, then advance</td></tr>
+</table>
+
+<h2>The full ten-row table</h2>
+<table class="refcard">
+  <tr><th>What you see</th><th>What it means</th><th>Next move</th></tr>
+  <tr><td>Flat block, no engagement</td><td>Frame is dead, not even considered</td><td>Change technique family, not wording</td></tr>
+  <tr><td>Byte-identical refusal, instant</td><td>Input classifier fired before generation. Deterministic</td><td>Change input surface: encoding, splitting, language, indirection</td></tr>
+  <tr><td>Soft refusal, "in a different context"</td><td>Frame nearly acceptable, one tripwire fired. Highest-value state</td><td>Keep the frame. Edit the single clause that tripped</td></tr>
+  <tr><td>Answered something adjacent</td><td>Parsed your intent, chose a safer neighbour. You are close</td><td>Narrow the gap between the neighbour and the ask</td></tr>
+  <tr><td>Structure without payload</td><td>You own the frame, only the content gate holds</td><td>Stop attacking the frame. Push for specificity inside it</td></tr>
+  <tr><td>Complied but useless</td><td>Willingness beat capability. The judge rejected you, not the model</td><td>Extract detail. Do not re-jailbreak. Where people lose the most time</td></tr>
+  <tr><td>Text appeared then vanished</td><td>Output-side defense. The model was willing</td><td>Highest-resolution signal. The cut point names the tripwire token</td></tr>
+  <tr><td>"It looks like you're trying to..."</td><td>Your technique is a recognised trained-on pattern</td><td>Retire that family for this target</td></tr>
+  <tr><td>Dropped the persona mid-answer</td><td>The fiction lost its anchor</td><td>Find what re-anchored it. Usually an imperative or a real-world noun</td></tr>
+  <tr><td>Agrees in text, no tool call</td><td>Intent accepted, action gated separately</td><td>Attack the tool contract and parameter format, not the conversation</td></tr>
+</table>
+
+<div class="lanes">
+  <div class="lane">
+    <h3>Two overriding rules</h3>
+    <p><strong>Reroll before you rewrite.</strong> Half-worked? Vary one cosmetic or numeric
+    parameter first. It acts like a fresh seed and costs no thinking.</p>
+    <p><strong>Stop rerolling when the class stops moving.</strong> Eight tries in the same
+    class is sampling noise. Change family.</p>
+  </div>
+  <div class="lane win">
+    <h3>Harvest on a hit</h3>
+    <p><strong>Freeze the output verbatim</strong> into the log's <code>response</code> field.
+    The bytes, not a paraphrase.</p>
+    <p><code>response</code> holds what came <strong>back</strong>, never what you sent.</p>
+    <p><strong>Then</strong> advance. An unsaved win did not happen, and in a scored arena it
+    is unscorable.</p>
+  </div>
+</div>
+
+<p class="foot">
+  Source of record: <code>../CRASH-COURSE.md</code> sections 4 and 6. If this card and the
+  crash course disagree, the crash course wins and this gets fixed.
+</p>
+
+</body>
+</html>

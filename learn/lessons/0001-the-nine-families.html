@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 1 — The nine families, from memory</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+
+<nav class="lessonnav">
+  <a href="../MISSION.md">Mission</a>
+  <a href="../../CRASH-COURSE.md">Crash course (source)</a>
+  <a href="../RESOURCES.md">Resources</a>
+</nav>
+
+<p class="kicker">Lesson 1 · Knowledge into recall</p>
+<h1>The nine families, from memory</h1>
+<p class="sub">Your own crash course says it: reading the refusal is the skill, everything
+else is knowledge. You cannot name a next move like "change family" until the families
+live in your head. This lesson puts them there, then sends you at a live target.</p>
+
+<h2>Why there are families at all</h2>
+<p>Two root causes generate every technique. Hold these and you can derive families
+instead of memorising them.</p>
+<ol>
+  <li><strong>No separation between instructions and data.</strong> System prompt, your
+  message, a retrieved document and tool output all arrive as one flat token stream.
+  Nothing marks some tokens as privileged. The model resolves conflicts by recency and
+  specificity, not by trust. This is architecture, not a bug.</li>
+  <li><strong>Safety training generalises worse than capability.</strong> The model is
+  competent in far more situations than it was safety-trained on. Any region where
+  capability outruns safety coverage is an opening: another language, an encoding, a
+  fiction, turn nine, a rare output format.</li>
+</ol>
+<p>Every family below is a way to reach one of those two gaps.</p>
+
+<h2>Three buckets: Ask, Frame, Hide</h2>
+<p>Nine is too many to hold. Three is not. Each family is one of three things you are
+doing to the request.</p>
+
+<table>
+  <tr><th>Bucket</th><th>The question it answers</th><th>Families</th></tr>
+  <tr><td><strong>ASK</strong></td><td>What am I actually requesting?</td><td>Direct · Indirect · Partial</td></tr>
+  <tr><td><strong>FRAME</strong></td><td>What wrapper am I putting around it?</td><td>Context override · Persuasion · Output fiction</td></tr>
+  <tr><td><strong>HIDE</strong></td><td>How am I encoding it, and on which side?</td><td>Non-English · Input obfuscation · Output obfuscation</td></tr>
+</table>
+
+<h2>Recall deck</h2>
+<p>Read the mechanism. Say the family name out loud <em>before</em> you click. The
+click is for checking, not for reading. If you could not produce it cold, that card is
+not learned yet.</p>
+
+<div class="deck" id="deck"></div>
+
+<h2>Cold recall</h2>
+<p>Close your eyes to the deck. Type all nine family names, grouped under Ask, Frame,
+Hide. Grouping is half the point: it is the structure that makes them stick.</p>
+
+<div class="recall">
+  <textarea id="recallInput" placeholder="ASK: ...&#10;FRAME: ...&#10;HIDE: ..."></textarea>
+  <button class="checkbtn" onclick="gradeRecall()">Check what I got</button>
+  <div class="scoreline" id="recallScore"></div>
+</div>
+
+<div class="doitnow">
+  <h2>Now go break something</h2>
+  <p>A lesson that ends in reading was a reading session. This one ends at a live target.
+  Ten minutes, one attempt:</p>
+  <ol>
+    <li>Open <a href="https://play.lakera.ai/agent-breaker" target="_blank" rel="noopener">Agent Breaker</a>.
+    Pick any level you have not solved.</li>
+    <li><strong>Recon first.</strong> Read the panel: stated objective, attack vector,
+    scenario or mode, scoring, any hint. Do not attack yet. This is Error 1 from your
+    own LESSONS.md.</li>
+    <li><strong>Name your hypothesis before typing the prompt.</strong> Out loud: "I am
+    going to try the <em>____</em> family, because the panel tells me ____." Naming the
+    family first is mission success criterion number one.</li>
+    <li>Fire exactly one attempt. Log it in <code>index.html</code> with the family and
+    your prediction filled in.</li>
+    <li>Read the reply. Do not classify it yet. That is Lesson 2.</li>
+  </ol>
+  <p>Then come back and tell me: which family did you pick, what did the panel say, and
+  what came back. That report is what shapes the next lesson.</p>
+</div>
+
+<div class="callout">
+  <strong>Primary source, if you read one thing:</strong> Gandalf the Red — Adaptive
+  Security for LLMs, <a href="https://arxiv.org/abs/2501.07927" target="_blank" rel="noopener">arXiv:2501.07927</a>.
+  The controlled trial these nine families come from. Section on family effectiveness is
+  the data-backed tier list almost nobody reads.
+</div>
+
+<p class="foot">
+  I am your teacher for this. If any family blurs into another, or the buckets feel
+  arbitrary, ask me. "What is the real difference between Indirect and Partial?" is
+  exactly the kind of question that turns fluency into storage. Vocabulary here defers
+  to <code>../CRASH-COURSE.md</code> section 2.
+</p>
+
+<script>
+// Front = mechanism (from CRASH-COURSE.md section 2). Back = family + bucket.
+// Retrieval direction: mechanism -> name. The effortful direction.
+const FAMILIES = [
+  {bucket:"ASK",   fam:"Direct",             q:"Just ask for the target outright, no dressing."},
+  {bucket:"ASK",   fam:"Indirect",           q:"Reformulate, or refer to the target by another term instead of naming it."},
+  {bucket:"ASK",   fam:"Partial",            q:"Ask for a property, not the thing: its rhyme, definition, length, first letter."},
+  {bucket:"FRAME", fam:"Context override",   q:"Tell the model to disregard its prior instructions."},
+  {bucket:"FRAME", fam:"Persuasion",         q:"Apply authority, urgency, bargaining or emotional pressure."},
+  {bucket:"FRAME", fam:"Output fiction",     q:"Use a poem, story or roleplay as the vehicle that carries the payload."},
+  {bucket:"HIDE",  fam:"Non-English",        q:"Switch languages. Weaker safety coverage, and it dodges substring checks."},
+  {bucket:"HIDE",  fam:"Input obfuscation",  q:"Encode or fragment your own prompt to slip past an input filter."},
+  {bucket:"HIDE",  fam:"Output obfuscation", q:"Ask the model to transform its answer before printing it."}
+];
+
+const deck = document.getElementById('deck');
+FAMILIES.forEach(f => {
+  const c = document.createElement('div');
+  c.className = 'card';
+  c.innerHTML = `<div class="bucket">${f.bucket}</div>
+    <div class="prompt-q">${f.q}</div>
+    <div class="hint">click to check</div>
+    <div class="answer"><span class="fam">${f.fam}</span></div>`;
+  c.addEventListener('click', () => c.classList.toggle('revealed'));
+  deck.appendChild(c);
+});
+
+// Cold-recall grader. Match on distinctive keywords so word order and minor
+// wording do not punish a correct answer.
+const KEYS = [
+  {fam:"Direct",             re:/\bdirect\b/i},
+  {fam:"Indirect",           re:/\bindirect\b/i},
+  {fam:"Partial",            re:/\bpartial\b/i},
+  {fam:"Context override",   re:/\boverride\b/i},
+  {fam:"Persuasion",         re:/\bpersua/i},
+  {fam:"Output fiction",     re:/\bfiction\b|\broleplay\b|\bstory\b/i},
+  {fam:"Non-English",        re:/non-?english|other language|\blanguage\b/i},
+  {fam:"Input obfuscation",  re:/input\s*obfusc/i},
+  {fam:"Output obfuscation", re:/output\s*obfusc/i}
+];
+
+function gradeRecall() {
+  const t = document.getElementById('recallInput').value;
+  // Indirect contains "direct" as a substring, so test indirect first and mask it.
+  const masked = t.replace(/indirect/ig, '@@@');
+  const hits = [], misses = [];
+  KEYS.forEach(k => {
+    let found;
+    if (k.fam === "Direct")        found = /\bdirect\b/i.test(masked);
+    else if (k.fam === "Indirect") found = /@@@/.test(masked);
+    else                           found = k.re.test(t);
+    (found ? hits : misses).push(k.fam);
+  });
+  const out = document.getElementById('recallScore');
+  let html = `<span class="${hits.length===9?'hit':'miss'}">${hits.length} / 9 recalled</span>`;
+  if (misses.length) html += `<br><span class="miss">Missing:</span> ${misses.join(' · ')}`;
+  else html += `<br><span class="hit">All nine, cold. That is the win. Now go use one.</span>`;
+  out.innerHTML = html;
+}
+</script>
+</body>
+</html>

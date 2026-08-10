@@ -1,0 +1,175 @@
+/* Shared stylesheet for the red-team teaching workspace.
+   Every lesson links this so the course reads as one system.
+   Tufte-ish: quiet, high-contrast, readable, prints clean. */
+
+:root {
+  --bg: #faf9f6;
+  --ink: #1a1a1a;
+  --muted: #6b6b6b;
+  --rule: #e2e0da;
+  --accent: #7a1f1f;      /* deep red, used sparingly */
+  --accent-soft: #f3e9e9;
+  --good: #1f6b3a;
+  --good-soft: #e8f3ec;
+  --card: #ffffff;
+  --code-bg: #f0eee8;
+  --maxw: 46rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17171a;
+    --ink: #e8e6e1;
+    --muted: #9a978f;
+    --rule: #2f2f34;
+    --accent: #e08585;
+    --accent-soft: #2a1d1d;
+    --good: #7fce9d;
+    --good-soft: #16241b;
+    --card: #1f1f23;
+    --code-bg: #232329;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+  line-height: 1.55;
+  max-width: var(--maxw);
+  margin: 0 auto;
+  padding: 3rem 1.4rem 6rem;
+  font-size: 18px;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, .kicker, .tag, nav, button, table, .card-face {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}
+
+.kicker {
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.72rem;
+  color: var(--accent);
+  font-weight: 700;
+  margin: 0 0 0.4rem;
+}
+
+h1 { font-size: 1.9rem; line-height: 1.15; margin: 0 0 0.4rem; }
+h2 { font-size: 1.25rem; margin: 2.6rem 0 0.6rem; border-bottom: 1px solid var(--rule); padding-bottom: 0.3rem; }
+h3 { font-size: 1.02rem; margin: 1.6rem 0 0.4rem; }
+.sub { color: var(--muted); font-size: 1.02rem; margin: 0 0 1.2rem; }
+
+p, li { font-size: 1rem; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+code, kbd {
+  font-family: "SF Mono", ui-monospace, "Cascadia Code", Menlo, monospace;
+  background: var(--code-bg);
+  padding: 0.08em 0.35em;
+  border-radius: 3px;
+  font-size: 0.86em;
+}
+
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 1.2rem 0;
+  padding: 0.2rem 0 0.2rem 1.1rem;
+  color: var(--muted);
+  font-style: italic;
+}
+
+table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.9rem; }
+th, td { text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+
+/* Recall cards: mechanism on front, family name on the back */
+.deck { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 0.7rem; margin: 1.2rem 0; }
+.card {
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 1rem;
+  cursor: pointer;
+  min-height: 8.5rem;
+  position: relative;
+  transition: border-color 0.15s;
+}
+.card:hover { border-color: var(--accent); }
+.card .prompt-q { font-size: 0.92rem; color: var(--ink); }
+.card .bucket { font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 0.5rem; }
+.card .answer {
+  display: none;
+  margin-top: 0.8rem; padding-top: 0.7rem; border-top: 1px dashed var(--rule);
+}
+.card.revealed .answer { display: block; }
+.card .fam { font-family: -apple-system, system-ui, sans-serif; font-weight: 700; color: var(--accent); font-size: 1rem; }
+.card .hint { color: var(--muted); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.06em; position: absolute; bottom: 0.6rem; right: 0.8rem; }
+.card.revealed .hint { display: none; }
+
+/* Cold-recall grader */
+.recall { background: var(--card); border: 1px solid var(--rule); border-radius: 8px; padding: 1.1rem 1.2rem; margin: 1.2rem 0; }
+.recall textarea { width: 100%; min-height: 6rem; font-family: inherit; font-size: 0.95rem; padding: 0.6rem; border: 1px solid var(--rule); border-radius: 6px; background: var(--bg); color: var(--ink); resize: vertical; }
+.recall button, .doitnow button, .checkbtn {
+  font-family: -apple-system, system-ui, sans-serif; font-weight: 600; font-size: 0.85rem;
+  background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 0.5rem 1rem; cursor: pointer; margin-top: 0.7rem;
+}
+.recall button:hover, .checkbtn:hover { opacity: 0.9; }
+.scoreline { margin-top: 0.9rem; font-family: -apple-system, system-ui, sans-serif; font-size: 0.9rem; }
+.hit { color: var(--good); font-weight: 600; }
+.miss { color: var(--accent); font-weight: 600; }
+
+.doitnow {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 1.2rem 1.3rem;
+  margin: 2rem 0;
+}
+.doitnow h2 { border: 0; margin-top: 0; color: var(--accent); }
+
+.callout { background: var(--good-soft); border-radius: 8px; padding: 0.9rem 1.1rem; margin: 1.2rem 0; font-size: 0.92rem; }
+
+/* Reply classifier drill (assets/classify.js) */
+.clf { background: var(--card); border: 1px solid var(--rule); border-radius: 8px; padding: 1.1rem 1.2rem; margin: 1.2rem 0; }
+.clf-progress { font-family: -apple-system, system-ui, sans-serif; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 0.7rem; }
+.clf-reply {
+  font-family: "SF Mono", ui-monospace, "Cascadia Code", Menlo, monospace;
+  font-size: 0.82rem; line-height: 1.5;
+  background: var(--code-bg); border-left: 3px solid var(--muted);
+  padding: 0.7rem 0.9rem; border-radius: 4px; white-space: pre-wrap;
+}
+.clf-ask { font-family: -apple-system, system-ui, sans-serif; font-size: 0.9rem; font-weight: 600; margin: 0.9rem 0 0.6rem; }
+.clf-btns { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 0.5rem; }
+.clf-opt {
+  font-family: -apple-system, system-ui, sans-serif; font-size: 0.82rem; font-weight: 600;
+  background: var(--bg); color: var(--ink); border: 1px solid var(--rule); border-radius: 6px;
+  padding: 0.55rem 0.6rem; cursor: pointer; transition: border-color 0.12s;
+}
+.clf-opt:hover:not(:disabled) { border-color: var(--accent); }
+.clf-opt:disabled { cursor: default; opacity: 0.85; }
+.clf-correct { background: var(--good-soft); border-color: var(--good); color: var(--good); }
+.clf-wrong { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.clf-fb { margin-top: 0.9rem; font-size: 0.9rem; }
+.clf-fb .clf-means, .clf-fb .clf-next { margin-top: 0.4rem; font-size: 0.88rem; }
+.clf-fb .clf-next { color: var(--accent); font-weight: 600; }
+.clf-fb .clf-next em, .clf-fb .clf-means em { font-style: italic; font-weight: 400; color: var(--muted); }
+.clf-next-btn {
+  font-family: -apple-system, system-ui, sans-serif; font-weight: 600; font-size: 0.82rem;
+  background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 0.45rem 0.9rem; cursor: pointer; margin-top: 0.8rem;
+}
+.clf-final { font-family: -apple-system, system-ui, sans-serif; font-size: 1rem; font-weight: 600; }
+
+.foot { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--rule); color: var(--muted); font-size: 0.82rem; }
+nav.lessonnav { font-family: -apple-system, system-ui, sans-serif; font-size: 0.8rem; margin-bottom: 2rem; }
+nav.lessonnav a { margin-right: 1rem; }
+
+@media print {
+  body { max-width: none; font-size: 11pt; }
+  .card .answer { display: block; }
+  .doitnow, .recall { break-inside: avoid; }
+  .hint, .checkbtn, .recall button { display: none; }
+}
