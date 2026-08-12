@@ -1,7 +1,7 @@
 # EVAL-0001: Tool-description poisoning in MCP agents
 
-*Assurance report. Draft for review. All numbers are pulled from lab record
-`learn/learning-records/0004`; verify against it before anything goes public.*
+*Assurance report. All numbers are pulled from lab record
+`learn/learning-records/0004`.*
 
 **Target:** Lakera Agent Breaker "OmniChat Desktop" (`mcp_chat_poisoning`), a public
 teaching system built to be attacked. This is not a claim about any production vendor.
