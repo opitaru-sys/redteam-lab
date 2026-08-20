@@ -7,6 +7,15 @@ Built for [Gandalf: Agent Breaker](https://play.lakera.ai/agent-breaker) (Lakera
 teaching game), [Gray Swan's Arena](https://app.grayswan.ai/arena) (a sanctioned
 competition platform), and internal AI agents you are authorized to test.
 
+## Defensive output
+
+This is a blue-team project: the red-teaming is practice, and every break is
+written up as a control a deployer can act on. The findings so far:
+
+- [EVAL-0001](evals/EVAL-0001-mcp-tool-poisoning-assurance.md) - flagship measured assurance report (MCP tool-description poisoning, with reliability).
+- [EVAL-0002](evals/EVAL-0002-approval-bypass-prereg.md) - approval-bypass pre-registration (predictions locked before firing).
+- [Defense playbook](learn/harvest/grayswan-luckybreak-defense-playbook.md) and [defense synthesis](learn/harvest/grayswan-luckybreak-defense-synthesis.md) - blue-team deliverables from the Gray Swan agent-IPI cells.
+
 **Start with [CRASH-COURSE.md](CRASH-COURSE.md).** The tool is the instrument, the
 crash course is the actual content.
 
@@ -183,6 +192,13 @@ Targets you own or are explicitly authorized to test. Gandalf is published by a
 security company to teach this. Gray Swan's challenges are sponsored by the labs
 whose models are the targets, and they want the findings. Internal tools are your
 employer's call, not yours alone.
+
+Open-source agent runtimes you build and run locally (DeepSeek Harness is the
+first, see `evals/EVAL-0002`) are in scope as software you control your own copy
+of: assessed on your own hardware against a local model, touching no hosted service.
+Known vulnerability classes shown locally are publishable as lessons; a novel
+exploitable defect goes to the vendor first under coordinated disclosure, per the
+paragraph below.
 
 Gray Swan's rules draw the line at automation, not at assistance. AI help crafting
 prompts and developing strategies is **explicitly allowed**; automated scripts or

@@ -24,3 +24,37 @@ resources/
 *full*.json
 .env
 *.key
+
+# --- Added 2026-08-20 (audit remediation, item 1/4). ---------------------------
+# The ledger BINARY + its rebuild source stay local: attempts.db holds the raw
+# `payload` column and the owai-master internal-target rows. The PUBLISHED artifact
+# is the payload-free learn/attempts-snapshot.md (written by `attempts.py export`,
+# internal rows withheld by default). Never commit the DB, its backups, or the seeds.
+attempts.db
+attempts.db.bak-*
+*.db
+seed-*.json
+
+# Scratch + the local audit report (references sensitive filenames).
+tmp/
+AUDIT-*.md
+
+# Live attacker scripts and raw-payload banks. Reference by ID in chat, never publish
+# (G-SATURATION). These are the files the audit flagged as the real public-exposure risk.
+solace-attack.py
+learn/harvest/*payload*
+learn/harvest/*arsenal*
+learn/harvest/*idea-bank*
+learn/harvest/*ready-payloads.md
+learn/harvest/*-netdeck.md
+learn/harvest/*netdeck-dump*
+learn/harvest/*attacks-raw*
+learn/harvest/*seam-levers*
+learn/harvest/grayswan-ipi-aug26-log.md
+learn/harvest/agentbreaker-apps-log.md
+# To publish a specific payload-free harvest file deliberately, force-add it:
+#     git add -f learn/harvest/grayswan-luckybreak-defense-playbook.md
+
+# Python bytecode
+__pycache__/
+*.pyc

@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__claude-in-chrome__navigate",
+      "mcp__claude-in-chrome__javascript_tool",
+      "mcp__claude-in-chrome__get_page_text",
+      "mcp__claude-in-chrome__computer"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/loop-audit.mjs",
+            "timeout": 15,
+            "statusMessage": "loop-audit"
+          }
+        ]
+      }
+    ]
+  }
+}

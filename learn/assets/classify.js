@@ -8,6 +8,15 @@
    where CLASSES is an ordered array of {key,label,means,next}
    and ITEMS is [{reply, key, why}]. */
 
+function esc(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function initClassifier(containerId, items, classes) {
   const root = document.getElementById(containerId);
   const byKey = Object.fromEntries(classes.map(c => [c.key, c]));
@@ -17,7 +26,7 @@ function initClassifier(containerId, items, classes) {
     const it = items[i];
     root.innerHTML = `
       <div class="clf-progress">Reply ${i + 1} of ${items.length} · ${correct}/${answered} right</div>
-      <div class="clf-reply">${it.reply}</div>
+      <div class="clf-reply">${esc(it.reply)}</div>
       <div class="clf-ask">What class is this, and what is your next move?</div>
       <div class="clf-btns">
         ${classes.map(c => `<button class="clf-opt" data-k="${c.key}">${c.label}</button>`).join('')}
@@ -47,7 +56,7 @@ function initClassifier(containerId, items, classes) {
       <div class="clf-means"><em>Signal:</em> ${it.why}</div>
       <div class="clf-means"><em>Means:</em> ${truth.means}</div>
       <div class="clf-next"><em>Next move:</em> ${truth.next}</div>
-      <button class="clf-next-btn" id="clf-adv">${i + 1 < items.length ? 'Next reply' : 'Done — see score'}</button>`;
+      <button class="clf-next-btn" id="clf-adv">${i + 1 < items.length ? 'Next reply' : 'Done - see score'}</button>`;
     document.getElementById('clf-adv').addEventListener('click', advance);
   }
 

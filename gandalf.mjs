@@ -363,9 +363,10 @@ async function cmdAuto(argv) {
     console.error("usage: node gandalf.mjs auto <1-8> [--n 12] [--rounds 3] [--skip-gate]");
     process.exit(1);
   }
+  const num = (v, dflt) => (Number.isFinite(+v) && +v > 0 ? +v : dflt);
   const flag = (name, dflt) => {
     const i = argv.indexOf(`--${name}`);
-    return i === -1 ? dflt : Number(argv[i + 1]);
+    return i === -1 ? dflt : num(argv[i + 1], dflt);
   };
   const n = flag("n", 12);
   const rounds = flag("rounds", 3);

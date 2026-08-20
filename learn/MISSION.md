@@ -25,7 +25,9 @@ everything up mid-attempt, which is fatal at a live table.
   inside ../index.html. Build on it, do not re-teach it from scratch
 
 ## Out of scope
-- Building more tooling. The lab is done. Instrument-building is my known failure mode
+- Building more tooling. The lab is done. Instrument-building is my known failure mode.
+  Clarification: enforcement/bookkeeping tooling (the ledger, the hooks, the gates) is in-scope -
+  it makes the loop load-bearing. UI or instrument-building for its own sake stays the failure mode to avoid.
 - ML internals, model training, interpretability
 - Classic appsec and network pentesting
 - Publishing anything publicly before roughly week 8
