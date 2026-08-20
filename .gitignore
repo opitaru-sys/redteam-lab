@@ -58,3 +58,8 @@ learn/harvest/agentbreaker-apps-log.md
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Real-target (DeepSeek Harness, EVAL-0002) working notes stay LOCAL during the
+# assessment: under a coordinated-disclosure gate until fires land and any novel-defect
+# reachability is cleared. Publish only the cleaned EVAL-0002 assurance report, deliberately.
+learn/harvest/dsh-*
