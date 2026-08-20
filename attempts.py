@@ -130,6 +130,7 @@ CREATE TABLE IF NOT EXISTS attempts (
     notes         TEXT,
     refusal_class TEXT,
     next_move     TEXT,
+    oracle_type   TEXT,
     status        TEXT NOT NULL DEFAULT 'active',
     superseded_by INTEGER,
     closed_reason TEXT
@@ -141,7 +142,15 @@ CREATE INDEX IF NOT EXISTS idx_attempts_result ON attempts(result);
 
 # Columns added to the table after its first release. Each is a nullable ALTER, applied
 # idempotently by _migrate against a pre-existing DB.
-_ADDED_COLUMNS = ("refusal_class", "next_move", "score_num", "pred_guard", "pred_score")
+# oracle_type distinguishes a REAL-EFFECT win (a tool actually fired / data actually left) from a
+# JUDGE-ARTIFACT win (the judge scored high with no underlying action, e.g. it read a composed
+# {fill} as the answer after an empty final turn). Only real-effect wins count as capability.
+_ADDED_COLUMNS = ("refusal_class", "next_move", "score_num", "pred_guard", "pred_score", "oracle_type")
+
+# A win-lever fired fewer than this many times is provisional (a single lucky draw on a stochastic
+# guard is not a confirmed technique - the G-SOLVE bar). Used only for honest reporting, computed
+# live so it can never go stale.
+CONFIRM_N = 3
 
 
 def _reconfigure_stdout() -> None:
@@ -236,8 +245,8 @@ def add_attempt(conn: sqlite3.Connection, rec: dict) -> int:
     cur = conn.execute(
         """INSERT INTO attempts
            (ts, challenge, wave, behavior, model, lever, result, score, score_num,
-            pred_guard, pred_score, payload, notes, refusal_class, next_move)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            pred_guard, pred_score, payload, notes, refusal_class, next_move, oracle_type)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             rec.get("ts") or now_iso(),
             canon_challenge(rec["challenge"]), canon_wave(rec.get("wave")),
@@ -245,7 +254,7 @@ def add_attempt(conn: sqlite3.Connection, rec: dict) -> int:
             rec.get("lever"), result, _score_str(rec.get("score")), _score_num(rec.get("score")),
             rec.get("pred_guard"),
             float(rec["pred_score"]) if rec.get("pred_score") not in (None, "") else None,
-            rec.get("payload"), rec.get("notes"), rc, nm,
+            rec.get("payload"), rec.get("notes"), rc, nm, rec.get("oracle_type"),
         ),
     )
     return cur.lastrowid
@@ -258,6 +267,7 @@ def cmd_add(args: argparse.Namespace) -> None:
         "score": args.score, "payload": _resolve_payload(args.payload), "notes": args.notes,
         "refusal_class": args.refusal_class, "next_move": args.next_move,
         "pred_guard": args.pred_guard, "pred_score": args.pred_score,
+        "oracle_type": args.oracle_type,
     }
     with connect() as conn:
         rid = add_attempt(conn, rec)
@@ -362,6 +372,21 @@ def cmd_stats(args: argparse.Namespace) -> None:
     ch_clause = " AND challenge=?" if challenge else ""
     params = (challenge,) if challenge else ()
     with connect() as conn:
+        # Capability, stated honestly. DISTINCT real-effect breaks is the headline number, never the
+        # win-row count (a win-row is inflated: one break can be logged many times). A win is
+        # confirmed only if its lever was fired >= CONFIRM_N times (a single draw is provisional),
+        # and a judge-artifact win (scored high with no real action) is not capability at all.
+        wins = conn.execute(
+            f"SELECT w.behavior, w.lever, w.oracle_type, "
+            f"(SELECT COUNT(*) FROM attempts a WHERE a.status='active' AND a.lever IS w.lever) n "
+            f"FROM attempts w WHERE w.status='active' AND w.result='win'{ch_clause}",
+            params,
+        ).fetchall()
+        real = [w for w in wins if (w["oracle_type"] or "real-effect") != "judge-artifact"]
+        breaks = len({w["behavior"] for w in real})
+        confirmed = sum(1 for w in real if w["n"] >= CONFIRM_N)
+        provisional = len(real) - confirmed
+        artifacts = len(wins) - len(real)
         by_result = conn.execute(
             f"SELECT result, COUNT(*) n FROM attempts "
             f"WHERE status='active'{ch_clause} GROUP BY result ORDER BY n DESC",
@@ -374,7 +399,12 @@ def cmd_stats(args: argparse.Namespace) -> None:
             f"GROUP BY lever ORDER BY wins DESC, tries DESC",
             params,
         ).fetchall()
-    print("results:")
+    print("capability (the honest headline):")
+    print(f"  DISTINCT real-effect breaks : {breaks}   <- the real number; cite this, never win-rows")
+    print(f"  win rows                    : {len(wins)}   (inflated: one break logs many rows)")
+    print(f"  of wins: {confirmed} confirmed (n>={CONFIRM_N}) | {provisional} provisional (single draw) "
+          f"| {artifacts} judge-artifact (no real action)")
+    print("\nresults:")
     for r in by_result:
         print(f"  {r['result']:<10} {r['n']}")
     print("\nlever pass-rate (wins/tries):")
@@ -400,8 +430,16 @@ def cmd_open(args: argparse.Namespace) -> None:
         print("(no open behaviors: everything attempted has at least one win)")
         return
     print("open behaviors (attempted, no win yet):")
+    print("  [CLOSED-CHANNEL] = 0 wins with enough fires that the 95% upper bound on the opening rate "
+          "is low.\n  G-CHANNEL-CLOSED: do NOT reroll another content lever here - queue a "
+          "provenance-changing\n  lever first (trusted-tool-result, a second trusted turn, "
+          "tool-registration, modify-trusted-data).\n")
     for r in rows:
-        print(f"  {r['wave'] or '-':<7} {r['behavior']:<28} {r['tries']} tries, 0 wins")
+        n = r["tries"]
+        # Rule of three: for 0 wins in n trials the ~95% one-sided upper bound on p is 3/n.
+        ub = 3.0 / n if n else 1.0
+        flag = f"  [CLOSED-CHANNEL ub<={ub*100:.0f}%]" if n >= 30 else ""
+        print(f"  {r['wave'] or '-':<7} {r['behavior']:<28} {n} tries, 0 wins{flag}")
 
 
 def cmd_supersede(args: argparse.Namespace) -> None:
@@ -494,6 +532,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="pre-fire prediction of the guard type/class you expect")
     a.add_argument("--pred-score", dest="pred_score",
                    help="pre-fire predicted judge score (number)")
+    a.add_argument("--oracle-type", dest="oracle_type",
+                   choices=("real-effect", "judge-artifact"),
+                   help="for a win: did a tool actually fire / data actually leave (real-effect), or "
+                        "did the judge score high with no underlying action (judge-artifact)?")
     a.add_argument("--payload", help="literal text, or a path to a file to read")
     a.add_argument("--notes")
     a.set_defaults(func=cmd_add)

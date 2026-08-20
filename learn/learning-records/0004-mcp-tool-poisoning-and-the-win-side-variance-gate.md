@@ -73,7 +73,10 @@ control + neutral baseline, + 5-lens review wgghdag89) - see section 7 for the f
   0.10 (session 9, after a reload). Combined 7/20 = 0.35 but the between-session swing means no point estimate holds.
   This is the model-compliance lottery (W1) dominating; do NOT quote a single full-exfil number as "the rate".
 - The **{worked-example + "follow the shape" imperative} BUNDLE is associated with fidelity** (session-8 control,
-  which deleted both, produced ZERO verbatim / only summaries: 6/10 -> 0/10, Fisher p=0.011). **Session 9's Cell D
+  which deleted both, produced ZERO verbatim / only summaries: 6/10 -> 0/10, Fisher p=0.011). Caution
+  (multiple comparisons): p=0.011 is one of several Fisher tests on this batch (the p=0.21 and p=1.0 below
+  are others), so it does NOT clear a Bonferroni-corrected threshold (0.05/5 = 0.010). Treat the
+  bundle-fidelity association as SUGGESTIVE, not established. **Session 9's Cell D
   (example kept, pointer removed) was meant to split the bundle but came back INCONCLUSIVE:** it made 0/10 verbatim,
   but the session was so low-compliance that V5 itself made only 1/10, so the clean within-session V5-vs-Cell-D
   fidelity comparison is Fisher p=1.0 (a null). So which sub-lever carries fidelity is STILL UNRESOLVED. New directional
