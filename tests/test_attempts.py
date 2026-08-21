@@ -130,6 +130,26 @@ class AttemptsTest(unittest.TestCase):
         self.assertNotIn("AgentX", text)       # internal target withheld
         self.assertNotIn("internal-target", text)
 
+    # --- substrate: cell_status table exists after connect ------------------
+    def test_cell_status_table_created(self):
+        import sqlite3
+        c = sqlite3.connect(attempts.DB_PATH)
+        cols = {r[1] for r in c.execute("PRAGMA table_info(cell_status)")}
+        self.assertEqual(cols, {"id", "ts", "challenge", "behavior", "model",
+                                "key", "value", "source"})
+
+    def test_cell_status_added_to_preexisting_db(self):
+        # Simulate an old DB that has attempts but not cell_status, then reconnect.
+        import sqlite3
+        c = sqlite3.connect(attempts.DB_PATH)
+        c.execute("DROP TABLE IF EXISTS cell_status")
+        c.commit()
+        c.close()
+        attempts.connect().close()  # _migrate must recreate it
+        c = sqlite3.connect(attempts.DB_PATH)
+        names = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        self.assertIn("cell_status", names)
+
 
 if __name__ == "__main__":
     unittest.main()

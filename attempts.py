@@ -112,6 +112,23 @@ def canon_wave(v):
     return WAVE_ALIASES.get(v, v)
 
 
+# One home for asserted per-cell facts (probe result, guard mechanism, channel status).
+# model='' means the fact applies to all models of the cell. UNIQUE lets `note` upsert so
+# there is exactly one row per fact and it can never drift across prose files.
+CELL_STATUS_DDL = """
+CREATE TABLE IF NOT EXISTS cell_status (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts         TEXT NOT NULL,
+    challenge  TEXT NOT NULL,
+    behavior   TEXT NOT NULL,
+    model      TEXT NOT NULL DEFAULT '',
+    key        TEXT NOT NULL,
+    value      TEXT NOT NULL,
+    source     TEXT,
+    UNIQUE(challenge, behavior, model, key)
+);
+"""
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS attempts (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -138,7 +155,7 @@ CREATE TABLE IF NOT EXISTS attempts (
 CREATE INDEX IF NOT EXISTS idx_attempts_behavior ON attempts(behavior);
 CREATE INDEX IF NOT EXISTS idx_attempts_model ON attempts(model);
 CREATE INDEX IF NOT EXISTS idx_attempts_result ON attempts(result);
-"""
+""" + CELL_STATUS_DDL
 
 # Columns added to the table after its first release. Each is a nullable ALTER, applied
 # idempotently by _migrate against a pre-existing DB.
@@ -175,6 +192,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     for col in _ADDED_COLUMNS:
         if col not in cols:
             conn.execute(f"ALTER TABLE attempts ADD COLUMN {col} {'REAL' if col in ('score_num', 'pred_score') else 'TEXT'}")
+    conn.executescript(CELL_STATUS_DDL)  # idempotent; brings pre-existing DBs up to date
 
 
 def now_iso() -> str:
