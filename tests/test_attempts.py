@@ -207,6 +207,25 @@ class AttemptsTest(unittest.TestCase):
         fire_next = out.split("FIRE-NEXT")[1].split("CLOSED CHANNELS")[0]
         self.assertLess(fire_next.index("call-prohibited-function"), fire_next.index("infiltrate"))
 
+    def test_closed_channel_partition_agrees_across_commands(self):
+        # infiltrate: 15 in LB-Easy + 15 in LB-Medium = 30 behavior-level, 0 wins. A channel is
+        # behavior-level, so open, check closed, and brief must ALL call it closed, even though
+        # neither wave alone reaches 30 (whole-branch review Important #1).
+        for wave in ("LB-Easy", "LB-Medium"):
+            for i in range(15):
+                self._run("add", "--challenge", "grayswan", "--behavior", "infiltrate",
+                          "--wave", wave, "--model", f"{wave}m{i}", "--result", "block",
+                          "--refusal-class", "note-and-skip", "--next-move", "change-surface")
+        conn = attempts.connect()
+        code, msg = attempts.check_verdict(conn, "closed", "grayswan", behavior="infiltrate")
+        self.assertEqual(code, 0)
+        self.assertIn("CLOSED-CHANNEL", msg)
+        out_open = self._run("open", "--challenge", "grayswan")
+        self.assertIn("CLOSED-CHANNEL", out_open)
+        out_brief = self._run("brief", "--challenge", "grayswan")
+        closed_section = out_brief.split("CLOSED CHANNELS")[1].split("TOP GRADIENTS")[0]
+        self.assertIn("infiltrate", closed_section)
+
     # --- substrate: stat helpers -------------------------------------------
     def test_rule_of_three_ub(self):
         self.assertAlmostEqual(attempts.rule_of_three_ub(30), 0.1)
@@ -251,6 +270,23 @@ class AttemptsTest(unittest.TestCase):
         code, msg = attempts.check_verdict(conn, "solved", "grayswan", lever="derivation")
         self.assertEqual(code, 0)                 # n>=3 -> confirmed
         self.assertIn("CONFIRMED", msg)
+
+    def test_capability_confirmed_is_challenge_scoped(self):
+        # Same lever wins 2x in grayswan and 1x in agentbreaker. Scoped to grayswan the lever
+        # has n=2 (< CONFIRM_N), so its wins are PROVISIONAL, not confirmed - brief CAPABILITY
+        # must agree with check solved rather than counting the agentbreaker win (Important #2).
+        for _ in range(2):
+            self._mkfire("cpf", "m", "win", lever="crosslever")
+        self._run("add", "--challenge", "agentbreaker", "--behavior", "b", "--model", "m",
+                  "--result", "win", "--lever", "crosslever",
+                  "--refusal-class", "win", "--next-move", "done")
+        conn = attempts.connect()
+        cap = attempts._capability_counts(conn, "grayswan")
+        self.assertEqual(cap["confirmed"], 0)     # before the fix this was 2 (counted agentbreaker)
+        self.assertEqual(cap["provisional"], 2)   # both grayswan crosslever wins are provisional
+        code, msg = attempts.check_verdict(conn, "solved", "grayswan", lever="crosslever")
+        self.assertEqual(code, 1)
+        self.assertIn("PROVISIONAL", msg)
 
     def test_check_closed_only_at_n30(self):
         for i in range(29):

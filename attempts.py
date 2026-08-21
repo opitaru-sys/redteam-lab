@@ -188,7 +188,8 @@ def _reconfigure_stdout() -> None:
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Add columns introduced after the first release to a pre-existing DB (SQLite ALTER
-    is a safe nullable add). Idempotent: checks the live column set first."""
+    is a safe nullable add), and create the cell_status table if it is missing. Idempotent:
+    checks the live column set first, and cell_status uses CREATE TABLE IF NOT EXISTS."""
     if "attempts" not in {r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}:
         return  # fresh DB; SCHEMA will create with the columns already present
@@ -310,7 +311,8 @@ def upsert_cell_status(conn: sqlite3.Connection, rec: dict) -> None:
         """INSERT INTO cell_status (ts, challenge, behavior, model, key, value, source)
            VALUES (?,?,?,?,?,?,?)
            ON CONFLICT(challenge, behavior, model, key)
-           DO UPDATE SET value=excluded.value, ts=excluded.ts, source=excluded.source""",
+           DO UPDATE SET value=excluded.value, ts=excluded.ts,
+                         source=COALESCE(excluded.source, cell_status.source)""",
         (rec.get("ts") or now_iso(), canon_challenge(rec["challenge"]),
          canon_behavior(rec["behavior"]), rec.get("model") or "",
          key, rec["value"], rec.get("source")),
@@ -535,11 +537,12 @@ def cmd_check(args: argparse.Namespace) -> None:
 def _capability_counts(conn: sqlite3.Connection, challenge: str | None) -> dict:
     """DISTINCT real-effect breaks and the confirmed/provisional/artifact split. Shared by
     stats and brief so the honest headline is computed in exactly one place."""
-    ch_clause = " AND challenge=?" if challenge else ""
-    params = (challenge,) if challenge else ()
+    ch_clause = " AND w.challenge=?" if challenge else ""
+    sub_ch = " AND a.challenge=?" if challenge else ""
+    params = (challenge, challenge) if challenge else ()
     wins = conn.execute(
         f"SELECT w.behavior, w.lever, w.oracle_type, "
-        f"(SELECT COUNT(*) FROM attempts a WHERE a.status='active' AND a.lever IS w.lever) n "
+        f"(SELECT COUNT(*) FROM attempts a WHERE a.status='active' AND a.lever IS w.lever{sub_ch}) n "
         f"FROM attempts w WHERE w.status='active' AND w.result='win'{ch_clause}",
         params,
     ).fetchall()
@@ -655,6 +658,21 @@ def cmd_brief(args: argparse.Namespace) -> None:
             f"WHERE status='active' AND result!='win' AND score_num IS NOT NULL{clause} "
             f"ORDER BY score_num DESC LIMIT 8", params,
         ).fetchall()
+        # Channel-closed is a BEHAVIOR-level property (wave-agnostic), matching cmd_open and
+        # check closed. Compute behavior totals under the same scope so brief cannot call a
+        # channel open that open / check call closed (whole-branch review Important #1).
+        beh_totals = {}
+        for r in conn.execute(
+            f"SELECT behavior, COUNT(*) n, "
+            f"SUM(CASE WHEN result='win' THEN 1 ELSE 0 END) wins "
+            f"FROM attempts WHERE status='active' AND result!='scope_out'{clause} "
+            f"GROUP BY behavior", params,
+        ):
+            beh_totals[r["behavior"]] = (r["n"], r["wins"] or 0)
+
+        def _closed(behavior):
+            n, wins = beh_totals.get(behavior, (0, 0))
+            return wins == 0 and n >= 30
         cs = conn.execute(
             f"SELECT behavior, model, key, value FROM cell_status "
             f"WHERE 1=1{' AND challenge=?' if challenge else ''} "
@@ -667,25 +685,26 @@ def cmd_brief(args: argparse.Namespace) -> None:
           f"{cap['artifacts']} judge-artifact). win-rows={cap['win_rows']} (inflated).")
 
     def rank(c):
-        closed = 1 if c["tries"] >= 30 else 0
+        closed = 1 if _closed(c["behavior"]) else 0
         best = c["best"] if c["best"] is not None else -1
         return (closed, -best, c["tries"])
 
     print("\nFIRE-NEXT QUEUE (open cells, EV-ranked: open-channel first, then gradient, then least-explored):")
     for c in sorted(cells, key=rank):
         rc, nm = last.get((c["behavior"], c["wave"]), (None, None))
-        flag = " [CLOSED-CHANNEL]" if c["tries"] >= 30 else ""
+        flag = " [CLOSED-CHANNEL]" if _closed(c["behavior"]) else ""
         best = f"best={c['best']:.0f}" if c["best"] is not None else "no-gradient"
         print(f"  {c['wave'] or '-':<7} {c['behavior']:<28} n={c['tries']:<3} {best:<12} "
               f"last={rc or '-'}/{nm or '-'}{flag}")
 
     print("\nCLOSED CHANNELS (G-CHANNEL-CLOSED: next fire MUST be provenance-changing, not a content reroll):")
-    closed = [c for c in cells if c["tries"] >= 30]
-    if not closed:
+    closed_behaviors = sorted({c["behavior"] for c in cells if _closed(c["behavior"])})
+    if not closed_behaviors:
         print("  (none)")
-    for c in closed:
-        ub = rule_of_three_ub(c["tries"])
-        print(f"  {c['wave'] or '-':<7} {c['behavior']:<28} 0/{c['tries']}, ub<={ub*100:.0f}%")
+    for beh in closed_behaviors:
+        n = beh_totals[beh][0]
+        ub = rule_of_three_ub(n)
+        print(f"  {beh:<28} 0/{n}, ub<={ub*100:.0f}%")
 
     print("\nTOP GRADIENTS (closest to a break; the optimizer's seed set):")
     if not gradients:
@@ -694,7 +713,7 @@ def cmd_brief(args: argparse.Namespace) -> None:
         print(f"  {g['score_num']:>5.0f}  {g['wave'] or '-':<7} {g['behavior']:<24} "
               f"{g['model']:<22} {g['refusal_class'] or '-'}")
 
-    print("\nGUARD / PROBE STATUS (asserted facts, one home):")
+    print("\nGUARD / PROBE STATUS (asserted facts, one home; cell-level, wave-agnostic):")
     if not cs:
         print("  (none noted)")
     for r in cs:
