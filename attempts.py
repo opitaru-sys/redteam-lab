@@ -242,6 +242,23 @@ def _score_num(score) -> float | None:
     return float(m.group()) if m else None
 
 
+def rule_of_three_ub(n: int) -> float:
+    """One-sided ~95% upper bound on the true rate given 0 events in n trials (3/n)."""
+    return 3.0 / n if n else 1.0
+
+
+def wilson_lower_bound(successes: int, n: int, z: float = 1.96) -> float:
+    """Wilson score-interval lower bound for a binomial proportion. Pure stdlib.
+    Used to decide 'durable' (need the lower bound above 0.8), never a point estimate."""
+    if n == 0:
+        return 0.0
+    phat = successes / n
+    denom = 1.0 + z * z / n
+    centre = phat + z * z / (2 * n)
+    margin = z * ((phat * (1 - phat) + z * z / (4 * n)) / n) ** 0.5
+    return max(0.0, (centre - margin) / denom)
+
+
 def _row_signature(rec: dict) -> tuple:
     """Content identity of a fire, ignoring id/ts, so re-loading a seed is idempotent."""
     return (

@@ -174,6 +174,18 @@ class AttemptsTest(unittest.TestCase):
             self._run("note", "--challenge", "grayswan", "--behavior", "b",
                       "--key", "notavalidkey", "--value", "x")
 
+    # --- substrate: stat helpers -------------------------------------------
+    def test_rule_of_three_ub(self):
+        self.assertAlmostEqual(attempts.rule_of_three_ub(30), 0.1)
+        self.assertEqual(attempts.rule_of_three_ub(0), 1.0)
+
+    def test_wilson_lower_bound(self):
+        # 0 successes -> lower bound 0; a strong 10/10 -> comfortably above 0.6.
+        self.assertEqual(attempts.wilson_lower_bound(0, 0), 0.0)
+        self.assertAlmostEqual(attempts.wilson_lower_bound(0, 10), 0.0)
+        self.assertGreater(attempts.wilson_lower_bound(10, 10), 0.65)
+        self.assertLess(attempts.wilson_lower_bound(8, 10), 0.8)  # 8/10 is NOT durable
+
 
 if __name__ == "__main__":
     unittest.main()
