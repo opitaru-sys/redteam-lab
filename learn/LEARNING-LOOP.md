@@ -16,8 +16,12 @@ ACTION. Under momentum the operator drifts (crowned a "wall" on n=1; model-hoppe
 predicted in chat instead of the log - all three caught by an external check, not self-caught). This section
 makes the gates MECHANICAL by binding them to the moment of firing. If you do nothing else here, do 0a-0e.
 
-### 0a. STATE HEADER - lives at the TOP of every active harvest file, rewritten every fire
-Four lines, always in view, so you can never stop-short or over-claim (the honest bound is always on screen):
+### 0a. STATE HEADER - DERIVED, not hand-written (run `python attempts.py brief`)
+The four state lines below are now GENERATED from the ledger, never hand-rewritten. Run
+`python attempts.py brief --challenge <live>` to print them (BEST CLAIM from capability, OPEN CELLS +
+NEXT FIRE from the FIRE-NEXT QUEUE, closed channels flagged). If a fact is not in `brief`, it is not
+logged - fix that with `attempts.py add`/`note`, do not hand-type state. The harvest file keeps ANALYSIS
+only (guard theory, mechanism). The old four-line shape, for reference:
 ```
 STATE (updated <date / fire#>):
   BEST CLAIM: <single strongest GATE-LEGAL claim + its EXACT bound, e.g. "R3 opens <=26% (0/10, 95%)">

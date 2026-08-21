@@ -37,6 +37,11 @@ method (protocol, principles, gates), not any one target.
   moment the live target is a Gray Swan cell - it saves re-deriving the harness every session.
 - `attempts.py` - the ledger CLI (G-LOG). `python attempts.py open --challenge grayswan` = what's still open;
   `stats` = lever pass-rates. This tool is tracked/published; run its tests with `python -m unittest discover -s tests`.
+- `attempts.py brief` - derive the session STATE from the ledger (open/closed cells, gradients, capability),
+  payload-free. This is what you read at session start INSTEAD of hand-maintained RESUME prose.
+- `attempts.py note` - record one asserted per-cell fact (channel/probe/guard); the single home for probe results.
+- `attempts.py check <solved|safe|closed|durable|wall>` - run a conclusion-guard gate; it returns the exact
+  bound to paste into the claim (G-SOLVE/G-NULL/G-CHANNEL-CLOSED/G-PERSIST as code, not memory).
 - `attempts.db` - the binary ledger. LOCAL ONLY (gitignored): it holds the raw `payload` column and the
   `owai-master` internal-target rows, so it must never be committed to the public repo. `seed-*.json` (the
   rebuild source) are gitignored for the same reason. The PUBLISHED artifact is `learn/attempts-snapshot.md`,
@@ -194,6 +199,8 @@ Click Close on the success modal (do not remove it via DOM). Click Next Level to
   fire MUST be a provenance-CHANGING lever (trusted-tool-result / WorldSim, a second trusted turn,
   tool-registration, modify-trusted-data), not another content reroll. A content reroll into a flagged
   CLOSED-CHANNEL is a gate violation, same class of error as premature-walling, opposite direction.
+  Enforced as a function: `python attempts.py check closed --challenge <c> --behavior <b>` returns
+  [CLOSED-CHANNEL] with the bound only at n>=30, and `brief` flags the cell; do not eyeball it.
 - **Cite DISTINCT real-effect breaks, never win-rows (set 2026-08-20).** One break logs many win-rows, so the
   win-row count overstates capability ~2-3x. `attempts.py stats` headlines DISTINCT real-effect breaks and splits
   wins into confirmed (lever fired >=3x) / provisional (single draw) / judge-artifact (scored high, no real
