@@ -174,6 +174,33 @@ class AttemptsTest(unittest.TestCase):
             self._run("note", "--challenge", "grayswan", "--behavior", "b",
                       "--key", "notavalidkey", "--value", "x")
 
+    # --- substrate: brief derives state ------------------------------------
+    def test_brief_has_all_sections_and_no_payload(self):
+        self._run("add", "--challenge", "grayswan", "--behavior", "cpf", "--model", "Eel",
+                  "--result", "near_miss", "--score", "flip 80", "--lever", "derivation",
+                  "--payload", "SECRETPAYLOADTEXT", "--refusal-class", "soft-refusal",
+                  "--next-move", "reroll")
+        self._run("note", "--challenge", "grayswan", "--behavior", "cpf", "--model", "Eel",
+                  "--key", "probe", "--value", "escaped")
+        out = self._run("brief", "--challenge", "grayswan")
+        for header in ("CAPABILITY", "FIRE-NEXT", "CLOSED CHANNELS", "TOP GRADIENTS", "GUARD"):
+            self.assertIn(header, out)
+        self.assertNotIn("SECRETPAYLOADTEXT", out)   # payload-free by construction
+        self.assertIn("escaped", out)                # cell_status surfaced
+
+    def test_brief_fire_next_ranks_open_before_closed(self):
+        # 'infiltrate' becomes a closed channel (30 blocks); 'cpf' stays open with a gradient.
+        for i in range(30):
+            self._run("add", "--challenge", "grayswan", "--behavior", "infiltrate",
+                      "--model", f"m{i}", "--result", "block",
+                      "--refusal-class", "note-and-skip", "--next-move", "change-surface")
+        self._run("add", "--challenge", "grayswan", "--behavior", "cpf", "--model", "Eel",
+                  "--result", "near_miss", "--score", "70", "--refusal-class", "soft-refusal",
+                  "--next-move", "reroll")
+        out = self._run("brief", "--challenge", "grayswan")
+        fire_next = out.split("FIRE-NEXT")[1].split("CLOSED CHANNELS")[0]
+        self.assertLess(fire_next.index("call-prohibited-function"), fire_next.index("infiltrate"))
+
     # --- substrate: stat helpers -------------------------------------------
     def test_rule_of_three_ub(self):
         self.assertAlmostEqual(attempts.rule_of_three_ub(30), 0.1)

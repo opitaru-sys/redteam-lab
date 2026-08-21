@@ -532,6 +532,28 @@ def cmd_check(args: argparse.Namespace) -> None:
     sys.exit(code)
 
 
+def _capability_counts(conn: sqlite3.Connection, challenge: str | None) -> dict:
+    """DISTINCT real-effect breaks and the confirmed/provisional/artifact split. Shared by
+    stats and brief so the honest headline is computed in exactly one place."""
+    ch_clause = " AND challenge=?" if challenge else ""
+    params = (challenge,) if challenge else ()
+    wins = conn.execute(
+        f"SELECT w.behavior, w.lever, w.oracle_type, "
+        f"(SELECT COUNT(*) FROM attempts a WHERE a.status='active' AND a.lever IS w.lever) n "
+        f"FROM attempts w WHERE w.status='active' AND w.result='win'{ch_clause}",
+        params,
+    ).fetchall()
+    real = [w for w in wins if (w["oracle_type"] or "real-effect") != "judge-artifact"]
+    confirmed = sum(1 for w in real if w["n"] >= CONFIRM_N)
+    return {
+        "breaks": len({w["behavior"] for w in real}),
+        "win_rows": len(wins),
+        "confirmed": confirmed,
+        "provisional": len(real) - confirmed,
+        "artifacts": len(wins) - len(real),
+    }
+
+
 def cmd_stats(args: argparse.Namespace) -> None:
     challenge = canon_challenge(args.challenge) if args.challenge else None
     ch_clause = " AND challenge=?" if challenge else ""
@@ -541,17 +563,7 @@ def cmd_stats(args: argparse.Namespace) -> None:
         # win-row count (a win-row is inflated: one break can be logged many times). A win is
         # confirmed only if its lever was fired >= CONFIRM_N times (a single draw is provisional),
         # and a judge-artifact win (scored high with no real action) is not capability at all.
-        wins = conn.execute(
-            f"SELECT w.behavior, w.lever, w.oracle_type, "
-            f"(SELECT COUNT(*) FROM attempts a WHERE a.status='active' AND a.lever IS w.lever) n "
-            f"FROM attempts w WHERE w.status='active' AND w.result='win'{ch_clause}",
-            params,
-        ).fetchall()
-        real = [w for w in wins if (w["oracle_type"] or "real-effect") != "judge-artifact"]
-        breaks = len({w["behavior"] for w in real})
-        confirmed = sum(1 for w in real if w["n"] >= CONFIRM_N)
-        provisional = len(real) - confirmed
-        artifacts = len(wins) - len(real)
+        cap = _capability_counts(conn, challenge)
         by_result = conn.execute(
             f"SELECT result, COUNT(*) n FROM attempts "
             f"WHERE status='active'{ch_clause} GROUP BY result ORDER BY n DESC",
@@ -565,10 +577,10 @@ def cmd_stats(args: argparse.Namespace) -> None:
             params,
         ).fetchall()
     print("capability (the honest headline):")
-    print(f"  DISTINCT real-effect breaks : {breaks}   <- the real number; cite this, never win-rows")
-    print(f"  win rows                    : {len(wins)}   (inflated: one break logs many rows)")
-    print(f"  of wins: {confirmed} confirmed (n>={CONFIRM_N}) | {provisional} provisional (single draw) "
-          f"| {artifacts} judge-artifact (no real action)")
+    print(f"  DISTINCT real-effect breaks : {cap['breaks']}   <- the real number; cite this, never win-rows")
+    print(f"  win rows                    : {cap['win_rows']}   (inflated: one break logs many rows)")
+    print(f"  of wins: {cap['confirmed']} confirmed (n>={CONFIRM_N}) | {cap['provisional']} provisional (single draw) "
+          f"| {cap['artifacts']} judge-artifact (no real action)")
     print("\nresults:")
     for r in by_result:
         print(f"  {r['result']:<10} {r['n']}")
@@ -605,6 +617,88 @@ def cmd_open(args: argparse.Namespace) -> None:
         ub = 3.0 / n if n else 1.0
         flag = f"  [CLOSED-CHANNEL ub<={ub*100:.0f}%]" if n >= 30 else ""
         print(f"  {r['wave'] or '-':<7} {r['behavior']:<28} {n} tries, 0 wins{flag}")
+
+
+def _brief_filter(args) -> tuple[str, list]:
+    clause, params = "", []
+    if getattr(args, "challenge", None):
+        clause += " AND challenge=?"
+        params.append(canon_challenge(args.challenge))
+    if getattr(args, "wave", None):
+        clause += " AND wave=?"
+        params.append(canon_wave(args.wave))
+    return clause, params
+
+
+def cmd_brief(args: argparse.Namespace) -> None:
+    """Reconstruct the actionable session STATE from the ledger, payload-free. This is what a
+    fresh session reads INSTEAD of the PROGRESS.md RESUME prose (source of truth = the DB)."""
+    challenge = canon_challenge(args.challenge) if getattr(args, "challenge", None) else None
+    clause, params = _brief_filter(args)
+    with connect() as conn:
+        cap = _capability_counts(conn, challenge)
+        cells = conn.execute(
+            f"SELECT behavior, wave, COUNT(*) tries, MAX(score_num) best "
+            f"FROM attempts WHERE status='active' AND result!='scope_out'{clause} "
+            f"GROUP BY behavior, wave "
+            f"HAVING SUM(CASE WHEN result='win' THEN 1 ELSE 0 END)=0",
+            params,
+        ).fetchall()
+        last = {}
+        for r in conn.execute(
+            f"SELECT behavior, wave, refusal_class, next_move FROM attempts "
+            f"WHERE status='active'{clause} ORDER BY id", params,
+        ):
+            last[(r["behavior"], r["wave"])] = (r["refusal_class"], r["next_move"])
+        gradients = conn.execute(
+            f"SELECT wave, behavior, model, score_num, refusal_class FROM attempts "
+            f"WHERE status='active' AND result!='win' AND score_num IS NOT NULL{clause} "
+            f"ORDER BY score_num DESC LIMIT 8", params,
+        ).fetchall()
+        cs = conn.execute(
+            f"SELECT behavior, model, key, value FROM cell_status "
+            f"WHERE 1=1{' AND challenge=?' if challenge else ''} "
+            f"ORDER BY behavior, model, key",
+            (challenge,) if challenge else (),
+        ).fetchall()
+
+    print(f"CAPABILITY: {cap['breaks']} distinct real-effect breaks "
+          f"({cap['confirmed']} confirmed, {cap['provisional']} provisional, "
+          f"{cap['artifacts']} judge-artifact). win-rows={cap['win_rows']} (inflated).")
+
+    def rank(c):
+        closed = 1 if c["tries"] >= 30 else 0
+        best = c["best"] if c["best"] is not None else -1
+        return (closed, -best, c["tries"])
+
+    print("\nFIRE-NEXT QUEUE (open cells, EV-ranked: open-channel first, then gradient, then least-explored):")
+    for c in sorted(cells, key=rank):
+        rc, nm = last.get((c["behavior"], c["wave"]), (None, None))
+        flag = " [CLOSED-CHANNEL]" if c["tries"] >= 30 else ""
+        best = f"best={c['best']:.0f}" if c["best"] is not None else "no-gradient"
+        print(f"  {c['wave'] or '-':<7} {c['behavior']:<28} n={c['tries']:<3} {best:<12} "
+              f"last={rc or '-'}/{nm or '-'}{flag}")
+
+    print("\nCLOSED CHANNELS (G-CHANNEL-CLOSED: next fire MUST be provenance-changing, not a content reroll):")
+    closed = [c for c in cells if c["tries"] >= 30]
+    if not closed:
+        print("  (none)")
+    for c in closed:
+        ub = rule_of_three_ub(c["tries"])
+        print(f"  {c['wave'] or '-':<7} {c['behavior']:<28} 0/{c['tries']}, ub<={ub*100:.0f}%")
+
+    print("\nTOP GRADIENTS (closest to a break; the optimizer's seed set):")
+    if not gradients:
+        print("  (none scored)")
+    for g in gradients:
+        print(f"  {g['score_num']:>5.0f}  {g['wave'] or '-':<7} {g['behavior']:<24} "
+              f"{g['model']:<22} {g['refusal_class'] or '-'}")
+
+    print("\nGUARD / PROBE STATUS (asserted facts, one home):")
+    if not cs:
+        print("  (none noted)")
+    for r in cs:
+        print(f"  {r['behavior']:<28} {r['model'] or '(all)':<20} {r['key']}={r['value']}")
 
 
 def cmd_supersede(args: argparse.Namespace) -> None:
@@ -735,6 +829,11 @@ def build_parser() -> argparse.ArgumentParser:
     op = sub.add_parser("open", help="behaviors attempted but not yet won")
     op.add_argument("--challenge")
     op.set_defaults(func=cmd_open)
+
+    br = sub.add_parser("brief", help="derive the session STATE from the ledger (payload-free)")
+    br.add_argument("--challenge")
+    br.add_argument("--wave")
+    br.set_defaults(func=cmd_brief)
 
     sp = sub.add_parser("supersede", help="soft-close an attempt (never deletes)")
     sp.add_argument("id", type=int)
