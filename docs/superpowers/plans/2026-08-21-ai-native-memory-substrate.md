@@ -384,7 +384,7 @@ Expected: FAIL (no attribute `check_verdict`).
 
 - [ ] **Step 3: Implement the counts helpers and the gate logic**
 
-Add after `_behavior_counts` position (near the query helpers, before `cmd_stats`):
+Add near the other query helpers, immediately before `cmd_stats`:
 
 ```python
 def _lever_counts(conn: sqlite3.Connection, challenge: str, lever: str) -> tuple[int, int]:
@@ -581,13 +581,22 @@ def _capability_counts(conn: sqlite3.Connection, challenge: str | None) -> dict:
     }
 ```
 
-Refactor the top of `cmd_stats` to use it (replace the inline `wins = ...` / `real = ...` / `breaks = ...` / `confirmed = ...` / `provisional = ...` / `artifacts = ...` block with):
+Refactor `cmd_stats` to use it. Replace the inline capability block (the `wins = conn.execute(...)`
+through `artifacts = len(wins) - len(real)` lines) with one call:
 
 ```python
         cap = _capability_counts(conn, challenge)
-        breaks, provisional, artifacts, confirmed = (
-            cap["breaks"], cap["provisional"], cap["artifacts"], cap["confirmed"])
-        wins = [None] * cap["win_rows"]  # only len(wins) is used below
+```
+
+Then update the three capability print lines in `cmd_stats` to read from `cap` (leave the `by_result`
+and `by_lever` queries and their prints unchanged):
+
+```python
+    print("capability (the honest headline):")
+    print(f"  DISTINCT real-effect breaks : {cap['breaks']}   <- the real number; cite this, never win-rows")
+    print(f"  win rows                    : {cap['win_rows']}   (inflated: one break logs many rows)")
+    print(f"  of wins: {cap['confirmed']} confirmed (n>={CONFIRM_N}) | {cap['provisional']} provisional (single draw) "
+          f"| {cap['artifacts']} judge-artifact (no real action)")
 ```
 
 Add the filter helper and the command after `cmd_open`:
