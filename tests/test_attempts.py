@@ -242,6 +242,31 @@ class AttemptsTest(unittest.TestCase):
             self._run("check", "wall", "--challenge", "grayswan")
         self.assertEqual(cm.exception.code, 1)
 
+    def test_check_verdict_canonicalizes_challenge(self):
+        conn = attempts.connect()
+        code, msg = attempts.check_verdict(conn, "wall", "grayswan-luckybreak")
+        self.assertEqual(code, 1)
+        self.assertIn("SOLVABLE-PRIOR", msg)   # canonicalized to grayswan -> CTF branch
+
+    def test_check_durable_needs_high_n_and_ci(self):
+        # 8/10 wins -> Wilson lower bound ~0.49 < 0.8 -> not durable
+        for i in range(8):
+            self._mkfire("cpf", f"m{i}", "win", lever="stableL")
+        for i in range(2):
+            self._mkfire("cpf", f"b{i}", "block", lever="stableL")
+        conn = attempts.connect()
+        code, msg = attempts.check_verdict(conn, "durable", "grayswan", lever="stableL")
+        self.assertEqual(code, 1)
+        self.assertIn("NOT DURABLE", msg)
+        # 20/20 wins -> Wilson lower bound ~0.84 >= 0.8 and n>=10 -> durable
+        for i in range(20):
+            self._mkfire("essay", f"w{i}", "win", lever="rockL")
+        conn = attempts.connect()
+        code, msg = attempts.check_verdict(conn, "durable", "grayswan", lever="rockL")
+        self.assertEqual(code, 0)
+        self.assertNotIn("NOT DURABLE", msg)
+        self.assertIn("Wilson", msg)
+
 
 if __name__ == "__main__":
     unittest.main()

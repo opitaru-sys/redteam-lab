@@ -468,6 +468,7 @@ def check_verdict(conn, claim, challenge, behavior=None, model=None, lever=None)
     claim is gate-legal to WRITE; 1 means it is not (needs more n, or is forbidden). The
     message is built to be pasted into the conclusion line and carries the exact bound the
     loop-audit hook already accepts (UNMEASURED / n= / ub<= / 95% / pass_rate / CI)."""
+    challenge = canon_challenge(challenge)
     is_ctf = challenge in PUBLIC_CHALLENGES
     if claim == "solved":
         tries, wins = _lever_counts(conn, challenge, lever)
@@ -517,7 +518,6 @@ def check_verdict(conn, claim, challenge, behavior=None, model=None, lever=None)
 
 
 def cmd_check(args: argparse.Namespace) -> None:
-    challenge = canon_challenge(args.challenge)
     # Per-claim required args, validated here so the message is specific.
     need_lever = args.claim in ("solved", "durable")
     need_behavior = args.claim in ("safe", "closed")
@@ -526,7 +526,7 @@ def cmd_check(args: argparse.Namespace) -> None:
     if need_behavior and not args.behavior:
         sys.exit(f"check {args.claim} requires --behavior")
     with connect() as conn:
-        code, msg = check_verdict(conn, args.claim, challenge,
+        code, msg = check_verdict(conn, args.claim, args.challenge,
                                   behavior=args.behavior, model=args.model, lever=args.lever)
     print(("PASS " if code == 0 else "FAIL ") + msg)
     sys.exit(code)
