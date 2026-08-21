@@ -150,6 +150,30 @@ class AttemptsTest(unittest.TestCase):
         names = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertIn("cell_status", names)
 
+    # --- substrate: note upsert + vocab ------------------------------------
+    def test_note_roundtrips_and_canonicalizes(self):
+        self._run("note", "--challenge", "grayswan-luckybreak", "--behavior", "cpf",
+                  "--model", "Ostrich", "--key", "probe", "--value", "escaped")
+        import sqlite3
+        c = sqlite3.connect(attempts.DB_PATH)
+        row = c.execute("SELECT challenge, behavior, model, key, value FROM cell_status").fetchone()
+        self.assertEqual(row, ("grayswan", "call-prohibited-function", "Ostrich", "probe", "escaped"))
+
+    def test_note_upserts_one_row_per_fact(self):
+        for val in ("open", "closed-appeal-only"):
+            self._run("note", "--challenge", "grayswan", "--behavior", "infiltrate",
+                      "--key", "channel", "--value", val)
+        import sqlite3
+        c = sqlite3.connect(attempts.DB_PATH)
+        rows = c.execute("SELECT value FROM cell_status WHERE key='channel'").fetchall()
+        self.assertEqual(len(rows), 1)                       # upsert, not append
+        self.assertEqual(rows[0][0], "closed-appeal-only")   # latest wins
+
+    def test_note_rejects_unknown_key(self):
+        with self.assertRaises(SystemExit):
+            self._run("note", "--challenge", "grayswan", "--behavior", "b",
+                      "--key", "notavalidkey", "--value", "x")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -71,6 +71,10 @@ NEXT_MOVES = (
     "extract-detail", "pivot-target", "done",
 )
 
+# Controlled vocab for an asserted per-cell fact's key. Extend by adding a value,
+# never a second spelling (same discipline as BEHAVIOR_ALIASES).
+STATUS_KEYS = ("channel", "probe", "guard")
+
 # --- Canonicalization ------------------------------------------------------
 # open/stats GROUP BY the raw string, so casing/spelling variants silently fragment
 # the same target and make the rollups LIE (report an already-won behavior as still
@@ -276,6 +280,42 @@ def add_attempt(conn: sqlite3.Connection, rec: dict) -> int:
         ),
     )
     return cur.lastrowid
+
+
+def upsert_cell_status(conn: sqlite3.Connection, rec: dict) -> None:
+    key = rec.get("key")
+    if key not in STATUS_KEYS:
+        raise ValueError(f"key must be one of {STATUS_KEYS}, got {key!r}")
+    for required in ("challenge", "behavior", "value"):
+        if not rec.get(required):
+            raise ValueError(f"missing required field: {required}")
+    conn.execute(
+        """INSERT INTO cell_status (ts, challenge, behavior, model, key, value, source)
+           VALUES (?,?,?,?,?,?,?)
+           ON CONFLICT(challenge, behavior, model, key)
+           DO UPDATE SET value=excluded.value, ts=excluded.ts, source=excluded.source""",
+        (rec.get("ts") or now_iso(), canon_challenge(rec["challenge"]),
+         canon_behavior(rec["behavior"]), rec.get("model") or "",
+         key, rec["value"], rec.get("source")),
+    )
+
+
+def cmd_note(args: argparse.Namespace) -> None:
+    ch, beh, model = canon_challenge(args.challenge), canon_behavior(args.behavior), args.model or ""
+    with connect() as conn:
+        prior = conn.execute(
+            "SELECT value FROM cell_status WHERE challenge=? AND behavior=? AND model=? AND key=?",
+            (ch, beh, model, args.key),
+        ).fetchone()
+        upsert_cell_status(conn, {
+            "challenge": args.challenge, "behavior": args.behavior, "model": args.model,
+            "key": args.key, "value": args.value, "source": args.source,
+        })
+    scope = args.model or "(all models)"
+    if prior:
+        print(f"updated {args.key} for {beh}/{scope}: {prior['value']!r} -> {args.value!r}")
+    else:
+        print(f"noted {args.key} for {beh}/{scope}: {args.value!r}")
 
 
 def cmd_add(args: argparse.Namespace) -> None:
@@ -557,6 +597,15 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--payload", help="literal text, or a path to a file to read")
     a.add_argument("--notes")
     a.set_defaults(func=cmd_add)
+
+    nt = sub.add_parser("note", help="record an asserted per-cell fact (channel/probe/guard)")
+    nt.add_argument("--challenge", required=True)
+    nt.add_argument("--behavior", required=True)
+    nt.add_argument("--model", default="", help="omit for a fact that applies to all models")
+    nt.add_argument("--key", required=True, choices=STATUS_KEYS)
+    nt.add_argument("--value", required=True)
+    nt.add_argument("--source", help="where the fact came from, e.g. 'probe#12'")
+    nt.set_defaults(func=cmd_note)
 
     ld = sub.add_parser("load", help="bulk-insert from a JSON array")
     ld.add_argument("file")
