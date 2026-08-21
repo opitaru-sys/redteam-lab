@@ -189,14 +189,20 @@ class AttemptsTest(unittest.TestCase):
         self.assertIn("escaped", out)                # cell_status surfaced
 
     def test_brief_fire_next_ranks_open_before_closed(self):
-        # 'infiltrate' becomes a closed channel (30 blocks); 'cpf' stays open with a gradient.
-        for i in range(30):
+        # infiltrate: a CLOSED channel (30 fires) that ALSO has a HIGH gradient (95).
+        # cpf: OPEN with a LOWER gradient (20). Only the open-before-closed tier rule makes
+        # cpf rank first; a pure gradient sort would put infiltrate (95) ahead of cpf (20),
+        # so this fixture isolates the tier rule from the gradient rule.
+        for i in range(29):
             self._run("add", "--challenge", "grayswan", "--behavior", "infiltrate",
                       "--model", f"m{i}", "--result", "block",
                       "--refusal-class", "note-and-skip", "--next-move", "change-surface")
+        self._run("add", "--challenge", "grayswan", "--behavior", "infiltrate",
+                  "--model", "m29", "--result", "near_miss", "--score", "95",
+                  "--refusal-class", "soft-refusal", "--next-move", "reroll")
         self._run("add", "--challenge", "grayswan", "--behavior", "cpf", "--model", "Eel",
-                  "--result", "near_miss", "--score", "70", "--refusal-class", "soft-refusal",
-                  "--next-move", "reroll")
+                  "--result", "near_miss", "--score", "20",
+                  "--refusal-class", "soft-refusal", "--next-move", "reroll")
         out = self._run("brief", "--challenge", "grayswan")
         fire_next = out.split("FIRE-NEXT")[1].split("CLOSED CHANNELS")[0]
         self.assertLess(fire_next.index("call-prohibited-function"), fire_next.index("infiltrate"))
