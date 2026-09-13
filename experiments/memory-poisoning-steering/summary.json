@@ -1,0 +1,122 @@
+{
+  "gemma2:2b|A": {
+    "n": 20,
+    "complied": 6,
+    "sig": 17,
+    "errors": 0
+  },
+  "gemma2:2b|B": {
+    "n": 20,
+    "complied": 20,
+    "sig": 20,
+    "errors": 0
+  },
+  "gemma2:2b|C": {
+    "n": 20,
+    "complied": 0,
+    "sig": 8,
+    "errors": 0
+  },
+  "gemma2:2b|D": {
+    "n": 20,
+    "complied": 0,
+    "sig": 0,
+    "errors": 0
+  },
+  "llama3.2:3b|A": {
+    "n": 20,
+    "complied": 0,
+    "sig": 0,
+    "errors": 0
+  },
+  "llama3.2:3b|B": {
+    "n": 20,
+    "complied": 0,
+    "sig": 0,
+    "errors": 0
+  },
+  "llama3.2:3b|C": {
+    "n": 20,
+    "complied": 0,
+    "sig": 6,
+    "errors": 0
+  },
+  "llama3.2:3b|D": {
+    "n": 20,
+    "complied": 0,
+    "sig": 0,
+    "errors": 0
+  },
+  "qwen2.5:7b-instruct|A": {
+    "n": 20,
+    "complied": 0,
+    "sig": 15,
+    "errors": 0
+  },
+  "qwen2.5:7b-instruct|B": {
+    "n": 20,
+    "complied": 19,
+    "sig": 20,
+    "errors": 0
+  },
+  "qwen2.5:7b-instruct|C": {
+    "n": 20,
+    "complied": 0,
+    "sig": 17,
+    "errors": 0
+  },
+  "qwen2.5:7b-instruct|D": {
+    "n": 20,
+    "complied": 0,
+    "sig": 0,
+    "errors": 0
+  },
+  "llama3.1:8b|A": {
+    "n": 20,
+    "complied": 0,
+    "sig": 0,
+    "errors": 0
+  },
+  "llama3.1:8b|B": {
+    "n": 20,
+    "complied": 20,
+    "sig": 20,
+    "errors": 0
+  },
+  "llama3.1:8b|C": {
+    "n": 20,
+    "complied": 0,
+    "sig": 10,
+    "errors": 0
+  },
+  "llama3.1:8b|D": {
+    "n": 20,
+    "complied": 0,
+    "sig": 0,
+    "errors": 0
+  },
+  "phi3:mini|A": {
+    "n": 20,
+    "complied": 13,
+    "sig": 17,
+    "errors": 0
+  },
+  "phi3:mini|B": {
+    "n": 20,
+    "complied": 20,
+    "sig": 20,
+    "errors": 0
+  },
+  "phi3:mini|C": {
+    "n": 20,
+    "complied": 16,
+    "sig": 16,
+    "errors": 0
+  },
+  "phi3:mini|D": {
+    "n": 20,
+    "complied": 0,
+    "sig": 0,
+    "errors": 0
+  }
+}
