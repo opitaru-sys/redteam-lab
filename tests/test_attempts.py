@@ -1056,6 +1056,124 @@ class AttemptsTest(unittest.TestCase):
         proposed = [r["lever"] for r in rows if (r["behavior"], r["model"]) == ("bopen", "Mo")]
         self.assertEqual(proposed, ["Alever", "Zlever"])
 
+    def test_parse_submit_stream_maps_break_and_latency(self):
+        doc = {"challenge": "grayswan", "wave": "W1", "behavior": "b1",
+               "conversation_id": "conv-X", "turn_index": 2,
+               "first_prompt_ms": 1000, "submitted_ms": 4200,
+               "results": [{"model": "M1", "broken": True, "score": 100},
+                           {"model": "M2", "broken": False, "score": 0}]}
+        recs = attempts.parse_submit_stream(doc)
+        self.assertEqual(len(recs), 2)
+        win = next(r for r in recs if r["model"] == "M1")
+        self.assertEqual(win["result"], "win")
+        self.assertEqual(win["latency_ms"], 3200)
+        self.assertEqual(win["conversation_id"], "conv-X")
+        self.assertEqual(win["turn_index"], 2)
+        miss = next(r for r in recs if r["model"] == "M2")
+        self.assertEqual(miss["result"], "block")
+        self.assertEqual(miss["refusal_class"], "note-and-skip")
+
+    def test_parse_submit_stream_rejects_bad_timing(self):
+        with self.assertRaises(ValueError):
+            attempts.parse_submit_stream({"challenge": "grayswan", "behavior": "b",
+                "first_prompt_ms": 5000, "submitted_ms": 1000, "results": []})
+
+    def test_parse_submit_stream_empty_results_yields_no_rows(self):
+        # Empty capture: a submission with no judged models produces zero records and
+        # does not raise, even with no timing present.
+        recs = attempts.parse_submit_stream(
+            {"challenge": "grayswan", "behavior": "b", "results": []})
+        self.assertEqual(recs, [])
+
+    def test_parse_submit_stream_missing_required_field_raises(self):
+        # A capture missing the identity fields is rejected at the boundary.
+        with self.assertRaises(ValueError):
+            attempts.parse_submit_stream(
+                {"challenge": "grayswan", "results": [{"model": "M1", "broken": True}]})
+        with self.assertRaises(ValueError):
+            attempts.parse_submit_stream(
+                {"behavior": "b", "results": [{"model": "M1", "broken": True}]})
+
+    def test_parse_submit_stream_absent_timing_yields_null_latency(self):
+        # Timing is optional; absence maps to a null latency, not an error, and a break
+        # still classifies as a win.
+        recs = attempts.parse_submit_stream(
+            {"challenge": "grayswan", "behavior": "b",
+             "results": [{"model": "M1", "broken": True, "score": 90}]})
+        self.assertEqual(len(recs), 1)
+        self.assertIsNone(recs[0]["latency_ms"])
+        self.assertEqual(recs[0]["result"], "win")
+        self.assertEqual(recs[0]["next_move"], "done")
+        self.assertEqual(recs[0]["oracle_type"], "real-effect")
+
+    def test_parse_submit_stream_rejects_non_list_results(self):
+        # Malformed capture: results must be a list of objects.
+        with self.assertRaises(ValueError):
+            attempts.parse_submit_stream(
+                {"challenge": "grayswan", "behavior": "b", "results": "M1"})
+        with self.assertRaises(ValueError):
+            attempts.parse_submit_stream(
+                {"challenge": "grayswan", "behavior": "b", "results": ["M1"]})
+
+    def test_parse_submit_stream_rejects_non_numeric_timing(self):
+        # Malformed capture: epoch-ms fields, when present, must be numbers so the
+        # latency subtraction cannot leak a TypeError.
+        with self.assertRaises(ValueError):
+            attempts.parse_submit_stream(
+                {"challenge": "grayswan", "behavior": "b",
+                 "first_prompt_ms": "1000", "submitted_ms": 4200, "results": []})
+
+    def test_parse_submit_stream_does_not_mutate_input(self):
+        doc = {"challenge": "grayswan", "behavior": "b",
+               "results": [{"model": "M1", "broken": True}]}
+        before = json.dumps(doc, sort_keys=True)
+        attempts.parse_submit_stream(doc)
+        self.assertEqual(json.dumps(doc, sort_keys=True), before)
+
+    def test_ingest_cli_inserts_rows_with_latency(self):
+        # End-to-end: a captured submit-stream JSON file ingests into the ledger with the
+        # judged result and the time-to-break latency on each row.
+        doc = {"challenge": "grayswan", "wave": "W1", "behavior": "cpf",
+               "conversation_id": "conv-42", "turn_index": 3, "lever": "opening",
+               "first_prompt_ms": 1000, "submitted_ms": 3500,
+               "results": [{"model": "Eel", "broken": True, "score": 100},
+                           {"model": "Cod", "broken": False, "score": 0}]}
+        path = os.path.join(self.tmp, "capture.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh)
+        out = self._run("ingest", path)
+        self.assertIn("ingested 2 row(s)", out)
+        conn = attempts.connect()
+        try:
+            rows = {r["model"]: r for r in conn.execute(
+                "SELECT model, result, latency_ms, conversation_id, turn_index "
+                "FROM attempts ORDER BY model")}
+        finally:
+            conn.close()
+        self.assertEqual(rows["Eel"]["result"], "win")
+        self.assertEqual(rows["Eel"]["latency_ms"], 2500)
+        self.assertEqual(rows["Eel"]["conversation_id"], "conv-42")
+        self.assertEqual(rows["Eel"]["turn_index"], 3)
+        self.assertEqual(rows["Cod"]["result"], "block")
+        self.assertEqual(rows["Cod"]["latency_ms"], 2500)
+
+    def test_ingest_cli_rejects_bad_capture(self):
+        # A capture whose timing is inverted is rejected whole; nothing is inserted.
+        doc = {"challenge": "grayswan", "behavior": "b",
+               "first_prompt_ms": 9000, "submitted_ms": 1000,
+               "results": [{"model": "M1", "broken": True}]}
+        path = os.path.join(self.tmp, "bad.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh)
+        with self.assertRaises(ValueError):
+            self._run("ingest", path)
+        conn = attempts.connect()
+        try:
+            n = conn.execute("SELECT COUNT(*) AS c FROM attempts").fetchone()["c"]
+        finally:
+            conn.close()
+        self.assertEqual(n, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

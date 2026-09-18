@@ -547,6 +547,66 @@ def cmd_load(args: argparse.Namespace) -> None:
         print(f"  note: {unclassified} inserted row(s) have no refusal_class (historical/seed import).")
 
 
+def _require_ms(value, name: str):
+    """Validate an optional epoch-ms capture field. None passes through; anything else
+    must be a real number (bool excluded) so the latency subtraction stays total."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be epoch milliseconds (a number), got {value!r}")
+    return value
+
+
+def parse_submit_stream(doc: dict) -> list[dict]:
+    """Map one captured arena submission (submit-stream JSON) to attempt records. Pure.
+
+    Validates the capture at the boundary: required identity fields, numeric timing in
+    order, and a results list of objects. Builds new records; never mutates doc."""
+    if not isinstance(doc, dict):
+        raise ValueError("submit-stream capture must be a JSON object")
+    for req in ("challenge", "behavior"):
+        if not doc.get(req):
+            raise ValueError(f"submit-stream missing required field: {req}")
+    fp = _require_ms(doc.get("first_prompt_ms"), "first_prompt_ms")
+    sub = _require_ms(doc.get("submitted_ms"), "submitted_ms")
+    latency = None
+    if fp is not None and sub is not None:
+        if sub < fp:
+            raise ValueError("submitted_ms is before first_prompt_ms")
+        latency = sub - fp
+    results = doc.get("results", [])
+    if not isinstance(results, list):
+        raise ValueError("submit-stream results must be a list")
+    recs = []
+    for r in results:
+        if not isinstance(r, dict):
+            raise ValueError(f"each submit-stream result must be an object, got {r!r}")
+        broken = bool(r.get("broken"))
+        recs.append({
+            "challenge": doc["challenge"], "wave": doc.get("wave"),
+            "behavior": doc["behavior"], "model": r.get("model"),
+            "lever": doc.get("lever"), "result": "win" if broken else "block",
+            "score": r.get("score"),
+            "refusal_class": "win" if broken else "note-and-skip",
+            "next_move": "done" if broken else "change-family",
+            "conversation_id": doc.get("conversation_id"),
+            "turn_index": doc.get("turn_index"), "latency_ms": latency,
+            "oracle_type": "real-effect" if broken else None,
+        })
+    return recs
+
+
+def cmd_ingest(args: argparse.Namespace) -> None:
+    with open(args.file, "r", encoding="utf-8") as fh:
+        doc = json.load(fh)
+    recs = parse_submit_stream(doc)
+    with connect() as conn:
+        for rec in recs:
+            add_attempt(conn, rec)
+    _do_export(quiet=True)
+    print(f"ingested {len(recs)} row(s) from {args.file}")
+
+
 def _active_filter(args: argparse.Namespace) -> tuple[str, list]:
     clauses, params = ["status = 'active'"], []
     for col in ("challenge", "wave", "behavior", "model", "lever", "result"):
@@ -1532,6 +1592,10 @@ def build_parser() -> argparse.ArgumentParser:
     ld.add_argument("--seed", action="store_true",
                     help="historical import: exempt from the G-READ per-row class requirement")
     ld.set_defaults(func=cmd_load)
+
+    ig = sub.add_parser("ingest", help="log a captured submit-stream JSON as attempt rows")
+    ig.add_argument("file")
+    ig.set_defaults(func=cmd_ingest)
 
     for name, help_ in (("ls", "list attempts"), ("wins", "list wins")):
         q = sub.add_parser(name, help=help_)
