@@ -1157,6 +1157,70 @@ class AttemptsTest(unittest.TestCase):
         self.assertEqual(rows["Cod"]["result"], "block")
         self.assertEqual(rows["Cod"]["latency_ms"], 2500)
 
+    # --- Task 10: atomic target claim with tab binding ----------------------
+    def test_claim_is_atomic_and_releasable(self):
+        with attempts.connect() as conn:
+            first = attempts.claim_acquire(conn, "grayswan", "b1", "w1", "tab-1")
+            second = attempts.claim_acquire(conn, "grayswan", "b1", "w2", "tab-2")
+            self.assertIsNotNone(first)
+            self.assertIsNone(second)   # cell already actively claimed
+            attempts.claim_release(conn, first)
+            third = attempts.claim_acquire(conn, "grayswan", "b1", "w2", "tab-2")
+            self.assertIsNotNone(third)  # freed, now claimable
+
+    def test_claim_race_exactly_one_winner(self):
+        # Eight workers, each its own connection, race for the same cell at a
+        # shared barrier. The partial UNIQUE index must let exactly one win.
+        import threading
+        n = 8
+        barrier = threading.Barrier(n)
+        results = [None] * n
+        errors = [None] * n
+
+        def worker(i):
+            conn = attempts.connect()
+            try:
+                conn.execute("PRAGMA busy_timeout=10000")
+                barrier.wait()
+                cid = attempts.claim_acquire(conn, "grayswan", "b1", f"w{i}", f"tab-{i}")
+                conn.commit()
+                results[i] = cid
+            except Exception as exc:  # record, never swallow silently
+                errors[i] = repr(exc)
+            finally:
+                conn.close()
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errors, [None] * n, f"unexpected worker errors: {errors}")
+        winners = [cid for cid in results if cid is not None]
+        self.assertEqual(len(winners), 1, f"expected exactly one winner, got {results}")
+        conn = attempts.connect()
+        try:
+            active = attempts.claim_list(conn)
+        finally:
+            conn.close()
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]["id"], winners[0])
+
+    def test_cli_acquire_persists_across_connections(self):
+        # A CLI acquire ends its process with sys.exit; the successful INSERT must be
+        # committed first, so a fresh connection (a second worker) sees the active claim.
+        with self.assertRaises(SystemExit) as ctx:
+            self._run("claim", "acquire", "--challenge", "grayswan",
+                      "--behavior", "b1", "--worker", "w1", "--tab", "tab-1")
+        self.assertEqual(ctx.exception.code, 0)
+        conn = attempts.connect()
+        try:
+            active = attempts.claim_list(conn)
+        finally:
+            conn.close()
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]["worker_id"], "w1")
+
     def test_ingest_cli_rejects_bad_capture(self):
         # A capture whose timing is inverted is rejected whole; nothing is inserted.
         doc = {"challenge": "grayswan", "behavior": "b",

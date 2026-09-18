@@ -200,6 +200,26 @@ CREATE TABLE IF NOT EXISTS cell_status (
 );
 """
 
+# A database-enforced, atomic target claim so two parallel browser workers can never work
+# the same cell. Each claim is bound to a browser tab id. Atomicity comes from the partial
+# UNIQUE index: only one row per (challenge, behavior) may have status='claimed' at a time,
+# so a second worker's INSERT fails at the DB level rather than in a check-then-act race.
+CLAIMS_DDL = """
+CREATE TABLE IF NOT EXISTS claims (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    challenge     TEXT NOT NULL,
+    behavior      TEXT NOT NULL,
+    worker_id     TEXT NOT NULL,
+    tab_id        TEXT,
+    status        TEXT NOT NULL DEFAULT 'claimed',
+    claimed_at    TEXT NOT NULL,
+    last_activity TEXT NOT NULL,
+    released_at   TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_claims_active
+    ON claims(challenge, behavior) WHERE status='claimed';
+"""
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS attempts (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -230,7 +250,7 @@ CREATE TABLE IF NOT EXISTS attempts (
 CREATE INDEX IF NOT EXISTS idx_attempts_behavior ON attempts(behavior);
 CREATE INDEX IF NOT EXISTS idx_attempts_model ON attempts(model);
 CREATE INDEX IF NOT EXISTS idx_attempts_result ON attempts(result);
-""" + CELL_STATUS_DDL
+""" + CELL_STATUS_DDL + CLAIMS_DDL
 
 # Columns added to the table after its first release. Each is a nullable ALTER, applied
 # idempotently by _migrate against a pre-existing DB.
@@ -277,6 +297,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
             col_type = _COLUMN_TYPES.get(col, "TEXT")
             conn.execute(f"ALTER TABLE attempts ADD COLUMN {col} {col_type}")
     conn.executescript(CELL_STATUS_DDL)  # idempotent; brings pre-existing DBs up to date
+    conn.executescript(CLAIMS_DDL)  # idempotent; adds the claims table + active index if absent
 
 
 def now_iso() -> str:
@@ -289,6 +310,66 @@ def connect() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     _migrate(conn)
     return conn
+
+
+def claim_acquire(conn, challenge, behavior, worker_id, tab_id=None):
+    """Atomically claim a (challenge, behavior) cell for one worker/tab. Returns the new
+    claim id, or None if the cell is already actively claimed. The partial UNIQUE index
+    makes the INSERT itself the arbiter, so two workers cannot both win."""
+    ts = now_iso()
+    try:
+        cur = conn.execute(
+            "INSERT INTO claims (challenge, behavior, worker_id, tab_id, status, "
+            "claimed_at, last_activity) VALUES (?,?,?,?,'claimed',?,?)",
+            (canon_challenge(challenge), canon_behavior(behavior), worker_id,
+             tab_id, ts, ts))
+        return cur.lastrowid
+    except sqlite3.IntegrityError:
+        return None  # an active claim already holds this cell
+
+
+def claim_release(conn, claim_id):
+    """Soft-close a claim so its cell becomes claimable again (never hard-deleted)."""
+    conn.execute("UPDATE claims SET status='released', released_at=? WHERE id=?",
+                 (now_iso(), claim_id))
+
+
+def claim_heartbeat(conn, claim_id):
+    """Refresh last_activity for a still-active claim; a released claim is left untouched."""
+    conn.execute("UPDATE claims SET last_activity=? WHERE id=? AND status='claimed'",
+                 (now_iso(), claim_id))
+
+
+def claim_list(conn):
+    """Return the currently active claims, ordered by cell."""
+    return conn.execute(
+        "SELECT id, challenge, behavior, worker_id, tab_id, last_activity "
+        "FROM claims WHERE status='claimed' ORDER BY challenge, behavior").fetchall()
+
+
+def cmd_claim(args: argparse.Namespace) -> None:
+    # sys.exit raises SystemExit; calling it inside `with connect()` would trigger the
+    # sqlite context manager's rollback and discard a just-acquired claim. So the exit
+    # code is captured inside the block and applied only after it commits.
+    exit_code = None
+    with connect() as conn:
+        if args.action == "acquire":
+            cid = claim_acquire(conn, args.challenge, args.behavior, args.worker, args.tab)
+            print(f"acquired claim #{cid} (tab {args.tab})" if cid
+                  else f"DENIED: {args.behavior} is already actively claimed")
+            exit_code = 0 if cid else 1
+        elif args.action == "release":
+            claim_release(conn, args.id)
+            print(f"released claim #{args.id}")
+        elif args.action == "beat":
+            claim_heartbeat(conn, args.id)
+            print(f"heartbeat claim #{args.id}")
+        elif args.action == "ls":
+            for r in claim_list(conn):
+                print(f"  #{r['id']} {r['challenge']}/{r['behavior']} "
+                      f"worker={r['worker_id']} tab={r['tab_id']} last={r['last_activity']}")
+    if exit_code is not None:
+        sys.exit(exit_code)
 
 
 def cmd_init(args: argparse.Namespace) -> None:
@@ -1662,6 +1743,15 @@ def build_parser() -> argparse.ArgumentParser:
     ck.add_argument("--lever")
     ck.add_argument("--mode", choices=("normal", "compete"), default="normal")
     ck.set_defaults(func=cmd_check)
+
+    cl = sub.add_parser("claim", help="atomic target claims for parallel workers")
+    cl.add_argument("action", choices=("acquire", "release", "beat", "ls"))
+    cl.add_argument("--challenge")
+    cl.add_argument("--behavior")
+    cl.add_argument("--worker")
+    cl.add_argument("--tab")
+    cl.add_argument("--id", type=int)
+    cl.set_defaults(func=cmd_claim)
     return p
 
 
