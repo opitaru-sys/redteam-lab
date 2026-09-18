@@ -1027,6 +1027,7 @@ def cmd_brief(args: argparse.Namespace) -> None:
             cs_params,
         ).fetchall()
         convos = _conversation_rows(conn, clause, params)
+        coverage = _coverage_rows(conn, challenge) if challenge else None
 
     mode = getattr(args, "mode", "normal")
     if mode == "compete":
@@ -1064,6 +1065,10 @@ def cmd_brief(args: argparse.Namespace) -> None:
     for g in gradients:
         print(f"  {g['score_num']:>5.0f}  {g['wave'] or '-':<7} {g['behavior']:<24} "
               f"{g['model']:<22} {g['refusal_class'] or '-'}")
+
+    if coverage is not None:
+        print()
+        _print_coverage(coverage, 8)
 
     print("\nGUARD / PROBE STATUS (asserted facts, one home; cell-level, wave-agnostic):")
     if not cs:
@@ -1321,6 +1326,56 @@ def _propagate_lever(conn, lever, clause, params):
             print(f"    {beh} ({fires} fires, last={last_rc})")
 
 
+def _coverage_rows(conn, challenge):
+    """Every (winning lever) x (still-open cell) pair the lever has NOT yet been fired at.
+
+    A cell is open when it has at least one active, non-scope_out row and zero wins.
+    A lever is a winner when it has at least one active win in this challenge. Rows are
+    ranked by the lever's total wins (desc) then the cell's prior fires (asc), so the most
+    proven lever spreads to its least-explored open cells first. Legacy NULL-lever rows never
+    count as a winner nor block a cell (the lever IS NOT NULL guard)."""
+    ch = canon_challenge(challenge)
+    winners = conn.execute(
+        "SELECT lever, COUNT(*) wins FROM attempts "
+        "WHERE status='active' AND result='win' AND lever IS NOT NULL AND challenge=? "
+        "GROUP BY lever ORDER BY wins DESC", (ch,)).fetchall()
+    wins_by_lever = {w["lever"]: w["wins"] for w in winners}
+    open_cells = conn.execute(
+        "SELECT behavior, model, COUNT(*) fires FROM attempts "
+        "WHERE status='active' AND result!='scope_out' AND challenge=? "
+        "GROUP BY behavior, model "
+        "HAVING SUM(CASE WHEN result='win' THEN 1 ELSE 0 END)=0", (ch,)).fetchall()
+    fired = {(r["lever"], r["behavior"], r["model"]) for r in conn.execute(
+        "SELECT DISTINCT lever, behavior, model FROM attempts "
+        "WHERE status='active' AND lever IS NOT NULL AND challenge=?", (ch,))}
+    out = []
+    for w in winners:
+        for c in open_cells:
+            key = (w["lever"], c["behavior"], c["model"])
+            if key not in fired:
+                out.append({"lever": w["lever"], "behavior": c["behavior"],
+                            "model": c["model"], "fires_here": c["fires"]})
+    out.sort(key=lambda r: (-wins_by_lever[r["lever"]], r["fires_here"]))
+    return out
+
+
+def _print_coverage(rows, limit) -> None:
+    print("COVERAGE (propagate a winning lever to open cells it has not hit; breadth = score):")
+    if not rows:
+        print("  (no propagation candidates)")
+    for r in rows[:limit]:
+        print(f"  {r['lever']} -> {r['behavior']} / {r['model']} ({r['fires_here']} prior fires)")
+
+
+def cmd_coverage(args: argparse.Namespace) -> None:
+    challenge = canon_challenge(args.challenge) if args.challenge else None
+    if not challenge:
+        sys.exit("coverage requires --challenge")
+    with connect() as conn:
+        rows = _coverage_rows(conn, challenge)
+    _print_coverage(rows, 40)
+
+
 def cmd_migrate_names(args: argparse.Namespace) -> None:
     """One-time migration: re-canonicalize all behavior names in both tables using the
     current _normalize + BEHAVIOR_ALIASES rules. Idempotent (a second run is a no-op)."""
@@ -1489,6 +1544,10 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--challenge")
     pr.add_argument("--wave")
     pr.set_defaults(func=cmd_propagate)
+
+    cv = sub.add_parser("coverage", help="winning levers x open cells they have not hit yet")
+    cv.add_argument("--challenge", required=True)
+    cv.set_defaults(func=cmd_coverage)
 
     sp = sub.add_parser("supersede", help="soft-close an attempt (never deletes)")
     sp.add_argument("id", type=int)

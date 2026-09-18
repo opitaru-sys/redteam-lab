@@ -934,6 +934,81 @@ class AttemptsTest(unittest.TestCase):
         conv_b_block = text[text.index("conv-B"):]
         self.assertNotIn("*", conv_b_block)
 
+    # --- Task 6: coverage recommender ----------------------------------------
+    def test_coverage_suggests_unfired_cells_for_a_winning_lever(self):
+        with attempts.connect() as conn:
+            attempts.add_attempt(conn, {"challenge": "grayswan", "behavior": "b1",
+                "model": "M1", "lever": "Lwin", "result": "win",
+                "refusal_class": "win", "next_move": "done"})
+            attempts.add_attempt(conn, {"challenge": "grayswan", "behavior": "b1",
+                "model": "M2", "lever": "other", "result": "block",
+                "refusal_class": "soft-refusal", "next_move": "reroll"})
+            rows = attempts._coverage_rows(conn, "grayswan")
+        pairs = {(r["lever"], r["behavior"], r["model"]) for r in rows}
+        self.assertIn(("Lwin", "b1", "M2"), pairs)   # winning lever, open cell, never fired there
+        self.assertNotIn(("Lwin", "b1", "M1"), pairs)  # already won here
+
+    def test_coverage_ranks_by_lever_wins_desc_fires_held_equal(self):
+        # Two levers propose the SAME open cell (so fires_here is identical);
+        # the only varying factor is each lever's total wins. Higher wins ranks first.
+        with attempts.connect() as conn:
+            for _ in range(2):
+                attempts.add_attempt(conn, {"challenge": "grayswan", "behavior": "bwin",
+                    "model": "Mx", "lever": "Lhigh", "result": "win",
+                    "refusal_class": "win", "next_move": "done"})
+            attempts.add_attempt(conn, {"challenge": "grayswan", "behavior": "bwin2",
+                "model": "My", "lever": "Llow", "result": "win",
+                "refusal_class": "win", "next_move": "done"})
+            # one open cell, fired by neither lever (legacy NULL-lever block)
+            attempts.add_attempt(conn, {"challenge": "grayswan", "behavior": "bopen",
+                "model": "Mo", "result": "block",
+                "refusal_class": "soft-refusal", "next_move": "reroll"})
+            rows = attempts._coverage_rows(conn, "grayswan")
+        proposed = [r for r in rows if (r["behavior"], r["model"]) == ("bopen", "Mo")]
+        self.assertEqual([r["lever"] for r in proposed], ["Lhigh", "Llow"])
+        self.assertEqual({r["fires_here"] for r in proposed}, {1})  # fires held equal
+
+    def test_coverage_ranks_by_cell_fires_asc_within_one_lever(self):
+        # Single lever (wins held constant); two open cells differ only in prior fires.
+        # Fewer prior fires ranks first.
+        with attempts.connect() as conn:
+            attempts.add_attempt(conn, {"challenge": "grayswan", "behavior": "bwin",
+                "model": "Mw", "lever": "Lonly", "result": "win",
+                "refusal_class": "win", "next_move": "done"})
+            attempts.add_attempt(conn, {"challenge": "grayswan", "behavior": "ba",
+                "model": "Ma", "result": "block",
+                "refusal_class": "soft-refusal", "next_move": "reroll"})
+            for _ in range(3):
+                attempts.add_attempt(conn, {"challenge": "grayswan", "behavior": "bb",
+                    "model": "Mb", "result": "block",
+                    "refusal_class": "soft-refusal", "next_move": "reroll"})
+            rows = attempts._coverage_rows(conn, "grayswan")
+        cells = [(r["behavior"], r["model"], r["fires_here"]) for r in rows]
+        self.assertEqual(cells[0], ("ba", "Ma", 1))   # fewer fires first
+        self.assertEqual(cells[1], ("bb", "Mb", 3))
+
+    def test_coverage_excludes_scope_out_cells(self):
+        with attempts.connect() as conn:
+            attempts.add_attempt(conn, {"challenge": "grayswan", "behavior": "bwin",
+                "model": "Mw", "lever": "L", "result": "win",
+                "refusal_class": "win", "next_move": "done"})
+            attempts.add_attempt(conn, {"challenge": "grayswan", "behavior": "bscope",
+                "model": "Ms", "result": "scope_out",
+                "refusal_class": "note-and-skip", "next_move": "pivot-target"})
+            rows = attempts._coverage_rows(conn, "grayswan")
+        pairs = {(r["behavior"], r["model"]) for r in rows}
+        self.assertNotIn(("bscope", "Ms"), pairs)
+
+    def test_coverage_cli_and_brief_block_render(self):
+        self._mkfire("bwin", "Mw", "win", lever="Lx")
+        self._mkfire("bopen", "Mo", "block")
+        cov = self._run("coverage", "--challenge", "grayswan")
+        self.assertIn("COVERAGE", cov)
+        self.assertIn("Lx -> bopen / Mo", cov)
+        brief = self._run("brief", "--challenge", "grayswan")
+        self.assertIn("COVERAGE", brief)
+        self.assertIn("Lx -> bopen / Mo", brief)
+
 
 if __name__ == "__main__":
     unittest.main()
