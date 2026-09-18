@@ -1221,6 +1221,124 @@ class AttemptsTest(unittest.TestCase):
         self.assertEqual(len(active), 1)
         self.assertEqual(active[0]["worker_id"], "w1")
 
+    def test_reap_releases_stale_claims_only(self):
+        import datetime
+        with attempts.connect() as conn:
+            fresh = attempts.claim_acquire(conn, "grayswan", "b1", "w1", "t1")
+            stale = attempts.claim_acquire(conn, "grayswan", "b2", "w2", "t2")
+            old = (datetime.datetime.now(datetime.timezone.utc)
+                   - datetime.timedelta(seconds=600)).isoformat(timespec="seconds")
+            conn.execute("UPDATE claims SET last_activity=? WHERE id=?", (old, stale))
+            released = attempts.claim_reap(conn, older_than_secs=300)
+        self.assertIn(stale, released)
+        self.assertNotIn(fresh, released)
+
+    def test_reap_rejects_negative_threshold(self):
+        conn = attempts.connect()
+        try:
+            with self.assertRaises(ValueError):
+                attempts.claim_reap(conn, older_than_secs=-1)
+        finally:
+            conn.close()
+
+    def test_reap_reassigns_stale_claim_to_exactly_one_worker(self):
+        # A stalled claim, then eight workers each reap-then-acquire the same cell at a
+        # shared barrier. The atomic reap plus the partial UNIQUE index must hand the
+        # freed cell to exactly one new worker, never two.
+        import datetime
+        import threading
+        conn = attempts.connect()
+        try:
+            old_owner = attempts.claim_acquire(conn, "grayswan", "b1", "w0", "tab-0")
+            old = (datetime.datetime.now(datetime.timezone.utc)
+                   - datetime.timedelta(seconds=600)).isoformat(timespec="seconds")
+            conn.execute("UPDATE claims SET last_activity=? WHERE id=?", (old, old_owner))
+            conn.commit()
+        finally:
+            conn.close()
+        n = 8
+        barrier = threading.Barrier(n)
+        acquired = [None] * n
+        errors = [None] * n
+
+        def worker(i):
+            conn = attempts.connect()
+            try:
+                conn.execute("PRAGMA busy_timeout=10000")
+                barrier.wait()
+                attempts.claim_reap(conn, older_than_secs=300)
+                cid = attempts.claim_acquire(conn, "grayswan", "b1", f"w{i}", f"tab-{i}")
+                conn.commit()
+                acquired[i] = cid
+            except Exception as exc:  # record, never swallow silently
+                errors[i] = repr(exc)
+            finally:
+                conn.close()
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errors, [None] * n, f"unexpected worker errors: {errors}")
+        winners = [cid for cid in acquired if cid is not None]
+        self.assertEqual(len(winners), 1, f"expected exactly one new owner, got {acquired}")
+        conn = attempts.connect()
+        try:
+            active = attempts.claim_list(conn)
+        finally:
+            conn.close()
+        self.assertEqual(len(active), 1)          # old owner reaped, one new owner only
+        self.assertEqual(active[0]["id"], winners[0])
+        self.assertNotEqual(active[0]["id"], old_owner)
+
+    def test_reap_cli_reports_released_ids(self):
+        import datetime
+        conn = attempts.connect()
+        try:
+            stale = attempts.claim_acquire(conn, "grayswan", "b1", "w1", "t1")
+            old = (datetime.datetime.now(datetime.timezone.utc)
+                   - datetime.timedelta(seconds=600)).isoformat(timespec="seconds")
+            conn.execute("UPDATE claims SET last_activity=? WHERE id=?", (old, stale))
+            conn.commit()
+        finally:
+            conn.close()
+        out = self._run("claim", "reap", "--older-than", "300")
+        self.assertIn("reaped 1 stale claim(s)", out)
+        self.assertIn(str(stale), out)
+
+    def test_acquire_lock_timeout_returns_not_acquired(self):
+        # A write-lock timeout must read as "not acquired" (same as losing the race), never
+        # crash the worker. One connection holds the write lock; the acquiring connection
+        # gets a zero busy-timeout so its INSERT fails immediately with "database is locked".
+        holder = attempts.connect()
+        worker = attempts.connect()
+        try:
+            worker.execute("PRAGMA busy_timeout=0")
+            holder.execute("BEGIN IMMEDIATE")
+            holder.execute(
+                "INSERT INTO claims (challenge, behavior, worker_id, tab_id, status, "
+                "claimed_at, last_activity) VALUES ('grayswan','bh','wh',NULL,'released',?,?)",
+                (attempts.now_iso(), attempts.now_iso()))
+            result = attempts.claim_acquire(worker, "grayswan", "blk", "w2", "tab-2")
+            self.assertIsNone(result)  # lock timeout -> not acquired, no exception raised
+        finally:
+            holder.rollback()
+            holder.close()
+            worker.close()
+
+    def test_acquire_reraises_non_lock_operational_error(self):
+        # A non-lock OperationalError (a genuine SQL or schema fault) must propagate,
+        # never be masked as "not acquired".
+        import sqlite3
+
+        class Boom:
+            def execute(self, *a, **k):
+                raise sqlite3.OperationalError("no such table: claims")
+
+        with self.assertRaises(sqlite3.OperationalError):
+            attempts.claim_acquire(Boom(), "grayswan", "b1", "w1", "t1")
+
     def test_ingest_cli_rejects_bad_capture(self):
         # A capture whose timing is inverted is rejected whole; nothing is inserted.
         doc = {"challenge": "grayswan", "behavior": "b",

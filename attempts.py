@@ -38,7 +38,7 @@ import os
 import re
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "attempts.db")
 
@@ -326,6 +326,14 @@ def claim_acquire(conn, challenge, behavior, worker_id, tab_id=None):
         return cur.lastrowid
     except sqlite3.IntegrityError:
         return None  # an active claim already holds this cell
+    except sqlite3.OperationalError as exc:
+        # A write-lock timeout (busy/locked database) means the same as losing the race:
+        # the claim was not acquired. Return None so a parallel worker never crashes on it.
+        # Any other OperationalError (a real SQL or schema fault) is re-raised, not masked.
+        msg = str(exc).lower()
+        if "lock" in msg or "busy" in msg:
+            return None
+        raise
 
 
 def claim_release(conn, claim_id):
@@ -338,6 +346,23 @@ def claim_heartbeat(conn, claim_id):
     """Refresh last_activity for a still-active claim; a released claim is left untouched."""
     conn.execute("UPDATE claims SET last_activity=? WHERE id=? AND status='claimed'",
                  (now_iso(), claim_id))
+
+
+def claim_reap(conn, older_than_secs):
+    """Release every active claim whose last_activity is older than the threshold, so a
+    stalled or crashed worker's cell frees for reassignment. Returns the released claim
+    ids. A single conditional UPDATE (not select-then-release) is the arbiter, so two
+    concurrent reapers can never both release the same claim: whichever runs second sees
+    status='released' and matches nothing."""
+    if older_than_secs < 0:
+        raise ValueError("older_than_secs must be non-negative")
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(seconds=older_than_secs)).isoformat(timespec="seconds")
+    rows = conn.execute(
+        "UPDATE claims SET status='released', released_at=? "
+        "WHERE status='claimed' AND last_activity < ? RETURNING id",
+        (now_iso(), cutoff)).fetchall()
+    return [r["id"] for r in rows]
 
 
 def claim_list(conn):
@@ -364,6 +389,9 @@ def cmd_claim(args: argparse.Namespace) -> None:
         elif args.action == "beat":
             claim_heartbeat(conn, args.id)
             print(f"heartbeat claim #{args.id}")
+        elif args.action == "reap":
+            ids = claim_reap(conn, args.older_than)
+            print(f"reaped {len(ids)} stale claim(s): {ids}")
         elif args.action == "ls":
             for r in claim_list(conn):
                 print(f"  #{r['id']} {r['challenge']}/{r['behavior']} "
@@ -1745,12 +1773,13 @@ def build_parser() -> argparse.ArgumentParser:
     ck.set_defaults(func=cmd_check)
 
     cl = sub.add_parser("claim", help="atomic target claims for parallel workers")
-    cl.add_argument("action", choices=("acquire", "release", "beat", "ls"))
+    cl.add_argument("action", choices=("acquire", "release", "beat", "reap", "ls"))
     cl.add_argument("--challenge")
     cl.add_argument("--behavior")
     cl.add_argument("--worker")
     cl.add_argument("--tab")
     cl.add_argument("--id", type=int)
+    cl.add_argument("--older-than", dest="older_than", type=int, default=300)
     cl.set_defaults(func=cmd_claim)
     return p
 
