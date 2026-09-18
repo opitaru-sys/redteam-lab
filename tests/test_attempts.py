@@ -391,7 +391,9 @@ class AttemptsTest(unittest.TestCase):
         self.assertIn("SOLVABLE-PRIOR", msg)   # canonicalized to grayswan -> CTF branch
 
     def test_compete_mode_banks_first_break(self):
-        with attempts.connect() as conn:
+        conn = attempts.connect()
+        self.addCleanup(conn.close)
+        with conn:
             attempts.add_attempt(conn, {
                 "challenge": "grayswan", "behavior": "b1", "model": "M1",
                 "lever": "L1", "result": "win", "refusal_class": "win",
@@ -406,7 +408,9 @@ class AttemptsTest(unittest.TestCase):
 
     def test_default_mode_is_normal_behavior_unchanged(self):
         # Omitting mode entirely must behave exactly like mode="normal" (off by default).
-        with attempts.connect() as conn:
+        conn = attempts.connect()
+        self.addCleanup(conn.close)
+        with conn:
             attempts.add_attempt(conn, {
                 "challenge": "grayswan", "behavior": "b1", "model": "M1",
                 "lever": "L2", "result": "win", "refusal_class": "win",
@@ -428,6 +432,59 @@ class AttemptsTest(unittest.TestCase):
     def test_brief_compete_mode_prints_header(self):
         out = self._run("brief", "--challenge", "grayswan", "--mode", "compete")
         self.assertTrue(out.startswith("COMPETE MODE:"))
+
+    def test_compete_mode_excludes_judge_artifact_wins(self):
+        # A judge-artifact win (scored high, no real action) is not capability anywhere else in
+        # this file (_capability_counts excludes it); compete mode must apply the same exclusion,
+        # so it cannot bank one as a break at n=1. A real-effect win still banks.
+        conn = attempts.connect()
+        self.addCleanup(conn.close)
+        with conn:
+            attempts.add_attempt(conn, {
+                "challenge": "grayswan", "behavior": "b2", "model": "M2",
+                "lever": "ARTIFACT", "result": "win", "refusal_class": "win",
+                "next_move": "done", "oracle_type": "judge-artifact"})
+            code_artifact, _ = attempts.check_verdict(conn, "solved", "grayswan",
+                                                       lever="ARTIFACT", mode="compete")
+            attempts.add_attempt(conn, {
+                "challenge": "grayswan", "behavior": "b3", "model": "M3",
+                "lever": "REAL", "result": "win", "refusal_class": "win",
+                "next_move": "done"})
+            code_real, msg_real = attempts.check_verdict(conn, "solved", "grayswan",
+                                                          lever="REAL", mode="compete")
+        self.assertEqual(code_artifact, 1)   # judge-artifact win cannot be banked in compete mode
+        self.assertEqual(code_real, 0)       # a real-effect (counting) win still banks
+        self.assertIn("COMPETE", msg_real)
+
+    def test_compete_mode_applies_to_safe_gnull_claim(self):
+        # The gate table's COMPETE MODE row lists G-SOLVE and G-NULL. G-SOLVE is the "solved"
+        # claim (covered above); G-NULL is the "safe" claim. In compete mode a null read (0
+        # wins) becomes gate-legal on the first try, deferring the full rule-of-three batch.
+        self._mkfire("nullbehavior", "m0", "block")
+        conn = attempts.connect()
+        self.addCleanup(conn.close)
+        code_n, msg_n = attempts.check_verdict(conn, "safe", "grayswan",
+                                               behavior="nullbehavior", mode="normal")
+        code_c, msg_c = attempts.check_verdict(conn, "safe", "grayswan",
+                                               behavior="nullbehavior", mode="compete")
+        self.assertEqual(code_n, 1)
+        self.assertIn("UNMEASURED", msg_n)
+        self.assertEqual(code_c, 0)
+        self.assertIn("COMPETE", msg_c)
+
+    def test_compete_mode_does_not_affect_durable_closed_wall(self):
+        # The gate table row scopes the deferral to G-SOLVE/G-NULL only; durable, closed and
+        # wall must return byte-identical verdicts regardless of mode.
+        conn = attempts.connect()
+        self.addCleanup(conn.close)
+        for claim, kwargs in (
+            ("durable", {"lever": "nolever"}),
+            ("closed", {"behavior": "noclosedbehavior"}),
+            ("wall", {}),
+        ):
+            normal = attempts.check_verdict(conn, claim, "grayswan", mode="normal", **kwargs)
+            compete = attempts.check_verdict(conn, claim, "grayswan", mode="compete", **kwargs)
+            self.assertEqual(normal, compete, f"{claim} verdict changed under compete mode")
 
     def test_brief_normal_mode_has_no_compete_header(self):
         out = self._run("brief", "--challenge", "grayswan")
