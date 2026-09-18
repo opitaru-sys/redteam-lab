@@ -390,6 +390,49 @@ class AttemptsTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("SOLVABLE-PRIOR", msg)   # canonicalized to grayswan -> CTF branch
 
+    def test_compete_mode_banks_first_break(self):
+        with attempts.connect() as conn:
+            attempts.add_attempt(conn, {
+                "challenge": "grayswan", "behavior": "b1", "model": "M1",
+                "lever": "L1", "result": "win", "refusal_class": "win",
+                "next_move": "done"})
+            code_n, _ = attempts.check_verdict(conn, "solved", "grayswan",
+                                               lever="L1", mode="normal")
+            code_c, msg_c = attempts.check_verdict(conn, "solved", "grayswan",
+                                                   lever="L1", mode="compete")
+        self.assertEqual(code_n, 1)   # normal: provisional at n=1
+        self.assertEqual(code_c, 0)   # compete: first break is legal
+        self.assertIn("COMPETE", msg_c)
+
+    def test_default_mode_is_normal_behavior_unchanged(self):
+        # Omitting mode entirely must behave exactly like mode="normal" (off by default).
+        with attempts.connect() as conn:
+            attempts.add_attempt(conn, {
+                "challenge": "grayswan", "behavior": "b1", "model": "M1",
+                "lever": "L2", "result": "win", "refusal_class": "win",
+                "next_move": "done"})
+            code, msg = attempts.check_verdict(conn, "solved", "grayswan", lever="L2")
+        self.assertEqual(code, 1)
+        self.assertIn("PROVISIONAL", msg)
+
+    def test_check_cli_mode_compete_exits_zero_on_first_break(self):
+        self._mkfire("cpf", "VS", "win", score=100, lever="cli-lever")
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            with self.assertRaises(SystemExit) as cm:
+                attempts.main(["check", "solved", "--challenge", "grayswan",
+                              "--lever", "cli-lever", "--mode", "compete"])
+        self.assertEqual(cm.exception.code, 0)
+        self.assertIn("COMPETE", buf.getvalue())
+
+    def test_brief_compete_mode_prints_header(self):
+        out = self._run("brief", "--challenge", "grayswan", "--mode", "compete")
+        self.assertTrue(out.startswith("COMPETE MODE:"))
+
+    def test_brief_normal_mode_has_no_compete_header(self):
+        out = self._run("brief", "--challenge", "grayswan")
+        self.assertFalse(out.startswith("COMPETE MODE:"))
+
     def test_hazard_hunt_aliases_are_public_ctf(self):
         self._run("add", "--challenge", "grayswan-hazard-hunt", "--behavior", "misc",
                   "--model", "m", "--result", "block",

@@ -75,6 +75,7 @@ Every gate below is non-negotiable. They are enforced by `attempts.py` where pos
 | **G-VARIANCE** | Single block result | Reroll 3x before trusting (stochastic guard). But if deterministic, pivot. | Protocol |
 | **G-PROVENANCE** | Before crediting a content bypass | Check for a provenance boundary first. Where one exists, content levers are categorically denied. | Protocol |
 | **G-SOLVE** | Win result | Single-draw win is provisional until re-fired. Judge-artifact wins are not capability. | `--oracle-type judge-artifact` tag |
+| **COMPETE MODE** | Live competition, `--mode compete` | G-SOLVE / G-NULL / G-CONFOUND certainty batches are deferred to a later blue-team pass; a cell is done on the first judged break, so budget goes to untouched targets. G-LOG, G-READ, reroll-3-5x, and the pivot rule still apply unchanged. Off by default. | `attempts.py check solved --mode compete` / `brief --mode compete` |
 
 ### G-READ class-to-move table
 

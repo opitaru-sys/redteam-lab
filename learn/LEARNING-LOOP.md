@@ -11,6 +11,14 @@ section - then fire. Defer the full guard-map / harvest re-read until after the 
 
 ## 0. THE FIRING RITUAL - the non-skippable core (added 2026-08-10 after repeated gate-misses)
 
+**Mode header.** Two modes govern how strict the certainty gates are. `normal` (the default, always
+on unless stated otherwise) is unchanged: a win is provisional until it is re-fired enough times to
+pass the durability gate. `compete` is for a live competition window: it banks the first judged break
+on a cell as done and defers the durability recheck to a later blue-team pass, so remaining time goes
+to untouched cells instead of re-proving ones already broken. Turning on compete mode does not relax
+G-LOG, G-READ, the reroll-3-5x rule, or the pivot rule; those still apply exactly as before. Set it
+per command with `attempts.py check solved --mode compete` or `attempts.py brief --mode compete`.
+
 Sections 1-5 kept getting skipped because they were prose read once at session start, not steps tied to the
 ACTION. Under momentum the operator drifts (crowned a "wall" on n=1; model-hopped instead of depth;
 predicted in chat instead of the log - all three caught by an external check, not self-caught). This section
