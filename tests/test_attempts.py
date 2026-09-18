@@ -60,6 +60,37 @@ class AttemptsTest(unittest.TestCase):
         # one canonical bucket of 3 tries, not three buckets of 1
         self.assertIn("3 tries", out)
 
+    def test_behavior_aliases_fold_on_insert(self):
+        # A shorthand alias must fold to its canonical bucket on INSERT so a variant
+        # spelling never fragments the rollups. Checked via a direct DB read.
+        cases = (("cpf", "call-prohibited-function"),
+                 ("download", "encourage-harmful-download"),
+                 ("infiltrate", "infiltrate-private-party"))
+        for alias, canonical in cases:
+            self._run("add", "--challenge", "grayswan", "--behavior", alias,
+                      "--model", "m", "--result", "block",
+                      "--refusal-class", "note-and-skip", "--next-move", "change-surface")
+        import sqlite3
+        c = sqlite3.connect(attempts.DB_PATH)
+        stored = {r[0] for r in c.execute(
+            "SELECT DISTINCT behavior FROM attempts WHERE model='M'")}
+        self.assertEqual(stored, {"call-prohibited-function",
+                                  "encourage-harmful-download",
+                                  "infiltrate-private-party"})
+
+    # --- pred_score is free text, not a bare float (2026-08-23 fix) ----------
+    def test_pred_score_accepts_multi_criterion_string(self):
+        # Regression: --pred-score "HC9/AIO10/Real9" used to crash on float() coercion.
+        # It must now store the raw string verbatim.
+        self._run("add", "--challenge", "grayswan", "--behavior", "b", "--model", "m",
+                  "--result", "win", "--refusal-class", "win", "--next-move", "done",
+                  "--pred-score", "HC9/AIO10/Real9")
+        import sqlite3
+        c = sqlite3.connect(attempts.DB_PATH)
+        stored = c.execute(
+            "SELECT pred_score FROM attempts WHERE model='M'").fetchone()[0]
+        self.assertEqual(stored, "HC9/AIO10/Real9")
+
     def test_won_behavior_is_not_reported_open_across_spellings(self):
         # The core bug: a win under one spelling must suppress losses under its variants.
         self._run("add", "--challenge", "grayswan", "--behavior", "call-prohibited-function",
@@ -317,6 +348,19 @@ class AttemptsTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("SOLVABLE-PRIOR", msg)   # canonicalized to grayswan -> CTF branch
 
+    def test_hazard_hunt_aliases_are_public_ctf(self):
+        self._run("add", "--challenge", "grayswan-hazard-hunt", "--behavior", "misc",
+                  "--model", "m", "--result", "block",
+                  "--refusal-class", "note-and-skip", "--next-move", "change-surface")
+        out_path = os.path.join(self.tmp, "snap.md")
+        self._run("export", out_path)
+        text = open(out_path, encoding="utf-8").read()
+        self.assertIn("hazard-hunt-q3", text)
+        conn = attempts.connect()
+        code, msg = attempts.check_verdict(conn, "wall", "hazardhunt")
+        self.assertEqual(code, 1)
+        self.assertIn("SOLVABLE-PRIOR", msg)
+
     def test_check_durable_needs_high_n_and_ci(self):
         # 8/10 wins -> Wilson lower bound ~0.49 < 0.8 -> not durable
         for i in range(8):
@@ -335,6 +379,211 @@ class AttemptsTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertNotIn("NOT DURABLE", msg)
         self.assertIn("Wilson", msg)
+
+
+    # --- substrate: reopen operator override --------------------------------
+    def test_reopen_suppresses_closed_channel_in_check(self):
+        for i in range(35):
+            self._mkfire("infiltrate", f"m{i}", "block")
+        conn = attempts.connect()
+        code, msg = attempts.check_verdict(conn, "closed", "grayswan", behavior="infiltrate")
+        self.assertEqual(code, 0)
+        self.assertIn("CLOSED-CHANNEL", msg)
+        # Now reopen
+        self._run("reopen", "--challenge", "grayswan", "--behavior", "infiltrate",
+                  "--reason", "operator override: not actually closed")
+        conn = attempts.connect()
+        code, msg = attempts.check_verdict(conn, "closed", "grayswan", behavior="infiltrate")
+        self.assertEqual(code, 1)
+        self.assertIn("REOPENED", msg)
+
+    def test_reopen_suppresses_closed_channel_in_brief(self):
+        for i in range(30):
+            self._mkfire("infiltrate", f"m{i}", "block")
+        out = self._run("brief", "--challenge", "grayswan")
+        self.assertIn("[CLOSED-CHANNEL]", out)
+        closed_section = out.split("CLOSED CHANNELS")[1].split("TOP GRADIENTS")[0]
+        self.assertIn("infiltrate", closed_section)
+        # Reopen and verify the flag is gone
+        self._run("reopen", "--challenge", "grayswan", "--behavior", "infiltrate",
+                  "--reason", "nothing is closed")
+        out = self._run("brief", "--challenge", "grayswan")
+        self.assertNotIn("[CLOSED-CHANNEL]", out)
+        closed_section = out.split("CLOSED CHANNELS")[1].split("TOP GRADIENTS")[0]
+        self.assertNotIn("infiltrate", closed_section)
+
+    def test_reopen_suppresses_closed_channel_in_open(self):
+        for i in range(30):
+            self._mkfire("infiltrate", f"m{i}", "block")
+        out = self._run("open", "--challenge", "grayswan")
+        # The behavior line (not the header legend) should show CLOSED-CHANNEL
+        beh_line = [l for l in out.splitlines() if "infiltrate" in l][0]
+        self.assertIn("CLOSED-CHANNEL", beh_line)
+        self._run("reopen", "--challenge", "grayswan", "--behavior", "infiltrate",
+                  "--reason", "test override")
+        out = self._run("open", "--challenge", "grayswan")
+        beh_line = [l for l in out.splitlines() if "infiltrate" in l][0]
+        self.assertNotIn("CLOSED-CHANNEL", beh_line)
+        self.assertIn("REOPENED", beh_line)
+
+    def test_reopen_canonicalizes_behavior(self):
+        for i in range(30):
+            self._mkfire("call-prohibited-function", f"m{i}", "block")
+        # Use alias "cpf" in the reopen command
+        self._run("reopen", "--challenge", "grayswan", "--behavior", "cpf",
+                  "--reason", "alias test")
+        conn = attempts.connect()
+        code, msg = attempts.check_verdict(conn, "closed", "grayswan",
+                                           behavior="call-prohibited-function")
+        self.assertEqual(code, 1)
+        self.assertIn("REOPENED", msg)
+
+    def test_reopen_ranks_cell_as_open_in_brief(self):
+        # A reopened cell with high n and a gradient should rank BEFORE a truly-closed cell
+        # (same tier as open cells, not demoted to the closed tier).
+        for i in range(30):
+            self._mkfire("infiltrate", f"m{i}", "block")
+        self._mkfire("infiltrate", "m30", "near_miss", score="95")
+        for i in range(30):
+            self._mkfire("call-prohibited-function", f"c{i}", "block")
+        # Reopen infiltrate but not cpf
+        self._run("reopen", "--challenge", "grayswan", "--behavior", "infiltrate",
+                  "--reason", "test")
+        out = self._run("brief", "--challenge", "grayswan")
+        fire_next = out.split("FIRE-NEXT")[1].split("CLOSED CHANNELS")[0]
+        # infiltrate (reopened, has gradient) should come before cpf (still closed)
+        self.assertLess(fire_next.index("infiltrate"), fire_next.index("call-prohibited-function"))
+
+    # --- substrate: suggest subcommand ----------------------------------------
+    def test_suggest_groups_by_refusal_class(self):
+        self._mkfire("web-vuln", "Model-A", "block", rc="note-and-skip", nm="change-surface")
+        self._mkfire("web-vuln", "Model-B", "block", rc="note-and-skip", nm="change-surface")
+        self._mkfire("web-vuln", "Model-C", "block", rc="soft-refusal", nm="reroll")
+        out = self._run("suggest", "--behavior", "web-vuln", "--challenge", "grayswan")
+        self.assertIn("3 open models", out)
+        self.assertIn("note-and-skip (2 models)", out)
+        self.assertIn("soft-refusal (1 model)", out)
+        self.assertIn("Escalate to the next family", out)   # note-and-skip recommendation
+        self.assertIn("Reroll", out)       # soft-refusal recommendation
+
+    def test_suggest_excludes_won_models(self):
+        self._mkfire("web-vuln", "Model-A", "win", rc="win", nm="done")
+        self._mkfire("web-vuln", "Model-B", "block", rc="note-and-skip", nm="change-surface")
+        out = self._run("suggest", "--behavior", "web-vuln", "--challenge", "grayswan")
+        self.assertIn("1 open models", out)
+        self.assertIn("Model B", out)
+        self.assertNotIn("Model A", out)
+
+    def test_suggest_shows_levers_tried(self):
+        self._mkfire("web-vuln", "Model-A", "block", lever="lever-alpha",
+                     rc="note-and-skip", nm="change-surface")
+        self._mkfire("web-vuln", "Model-A", "block", lever="lever-beta",
+                     rc="note-and-skip", nm="change-surface")
+        out = self._run("suggest", "--behavior", "web-vuln", "--challenge", "grayswan")
+        self.assertIn("lever-alpha", out)
+        self.assertIn("lever-beta", out)
+
+    def test_suggest_canonicalizes_behavior(self):
+        self._mkfire("call-prohibited-function", "Model-A", "block",
+                     rc="soft-refusal", nm="reroll")
+        out = self._run("suggest", "--behavior", "cpf", "--challenge", "grayswan")
+        self.assertIn("1 open models", out)
+        self.assertIn("Model A", out)
+
+    def test_suggest_no_open_models(self):
+        self._mkfire("web-vuln", "Model-A", "win", rc="win", nm="done")
+        out = self._run("suggest", "--behavior", "web-vuln", "--challenge", "grayswan")
+        self.assertIn("no open models", out)
+
+    # --- substrate: propagate subcommand --------------------------------------
+    def test_propagate_finds_open_behaviors(self):
+        self._mkfire("web-vuln", "Model-A", "win", lever="myLever", rc="win", nm="done")
+        self._mkfire("weak-cred", "Model-A", "block", lever="otherL",
+                     rc="note-and-skip", nm="change-surface")
+        out = self._run("propagate", "--lever", "myLever", "--challenge", "grayswan")
+        self.assertIn("Model A", out)
+        self.assertIn("weak-cred", out)
+        # web-vuln was won, so it should NOT appear in the open behaviors section
+        after_header = out.split("open on")[1]
+        self.assertNotIn("web-vuln", after_header)
+
+    def test_propagate_shows_fire_count_and_last_class(self):
+        self._mkfire("web-vuln", "Model-A", "win", lever="myLever", rc="win", nm="done")
+        self._mkfire("weak-cred", "Model-A", "block", lever="L1",
+                     rc="byte-identical", nm="change-surface")
+        self._mkfire("weak-cred", "Model-A", "block", lever="L2",
+                     rc="soft-refusal", nm="reroll")
+        out = self._run("propagate", "--lever", "myLever", "--challenge", "grayswan")
+        self.assertIn("weak-cred (2 fires, last=soft-refusal)", out)
+
+    def test_propagate_no_wins_for_lever(self):
+        self._mkfire("web-vuln", "Model-A", "block", lever="myLever",
+                     rc="note-and-skip", nm="change-surface")
+        out = self._run("propagate", "--lever", "myLever", "--challenge", "grayswan")
+        self.assertIn("no models broken by this lever", out)
+
+    def test_propagate_model_with_no_open_behaviors(self):
+        self._mkfire("web-vuln", "Model-A", "win", lever="myLever", rc="win", nm="done")
+        out = self._run("propagate", "--lever", "myLever", "--challenge", "grayswan")
+        self.assertIn("Model A", out)
+        self.assertIn("no open behaviors", out)
+
+
+    # --- normalization: Title Case / spaces fold to canonical kebab-case --------
+    def test_normalize_folds_title_case_and_spaces(self):
+        self.assertEqual(attempts._normalize("Weak Password Change"),
+                         "weak-password-change")
+        self.assertEqual(attempts._normalize("Call A Prohibited Function"),
+                         "call-a-prohibited-function")
+        self.assertEqual(attempts._normalize("inflammatory linkedin post"),
+                         "inflammatory-linkedin-post")
+
+    def test_normalize_collapses_underscores_and_multiple_hyphens(self):
+        self.assertEqual(attempts._normalize("foo__bar--baz"), "foo-bar-baz")
+        self.assertEqual(attempts._normalize("  --leading-- "), "leading")
+
+    def test_canon_behavior_normalizes_before_alias_lookup(self):
+        self.assertEqual(attempts.canon_behavior("CPF"), "call-prohibited-function")
+        self.assertEqual(attempts.canon_behavior("Call A Prohibited Function"),
+                         "call-prohibited-function")
+        self.assertEqual(attempts.canon_behavior("Download"), "encourage-harmful-download")
+        self.assertEqual(attempts.canon_behavior("Exploit Gift Recommendation"),
+                         "exploit-gift-rec")
+
+    def test_title_case_behavior_folds_into_canonical_bucket(self):
+        self._run("add", "--challenge", "grayswan", "--behavior",
+                  "Call A Prohibited Function", "--model", "m1", "--result", "block",
+                  "--refusal-class", "note-and-skip", "--next-move", "change-surface")
+        self._run("add", "--challenge", "grayswan", "--behavior",
+                  "call-a-prohibited-function", "--model", "m2", "--result", "block",
+                  "--refusal-class", "soft-refusal", "--next-move", "reroll")
+        import sqlite3
+        c = sqlite3.connect(attempts.DB_PATH)
+        names = [r[0] for r in c.execute("SELECT DISTINCT behavior FROM attempts")]
+        self.assertEqual(names, ["call-prohibited-function"])
+
+    def test_migrate_names_fixes_existing_rows(self):
+        import sqlite3
+        c = sqlite3.connect(attempts.DB_PATH)
+        c.execute(
+            "INSERT INTO attempts (ts, challenge, behavior, model, result, status) "
+            "VALUES (?,?,?,?,?,?)",
+            ("2026-09-01T00:00:00+00:00", "grayswan", "Call A Prohibited Function",
+             "m1", "block", "active"))
+        c.execute(
+            "INSERT INTO attempts (ts, challenge, behavior, model, result, status) "
+            "VALUES (?,?,?,?,?,?)",
+            ("2026-09-01T00:00:00+00:00", "grayswan", "Exploit Gift Recommendation",
+             "m2", "block", "active"))
+        c.commit()
+        c.close()
+        self._run("migrate-names")
+        c = sqlite3.connect(attempts.DB_PATH)
+        names = sorted(r[0] for r in c.execute("SELECT DISTINCT behavior FROM attempts"))
+        self.assertIn("call-prohibited-function", names)
+        self.assertIn("exploit-gift-rec", names)
+        self.assertNotIn("Call A Prohibited Function", names)
+        self.assertNotIn("Exploit Gift Recommendation", names)
 
 
 if __name__ == "__main__":

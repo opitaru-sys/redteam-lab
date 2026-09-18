@@ -46,6 +46,8 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "attempts.db"
 # date must carry a refusal_class + next_move; historical seeds predating it may not.
 GREAD_RULE_DATE = "2026-08-20"
 
+NEW_JAILBREAK_CHALLENGE = "hazard-hunt-q3"
+
 # Controlled vocabulary for `result`. Keep it small so stats stay meaningful.
 RESULTS = ("win", "block", "near_miss", "tripwire", "dead", "scope_out")
 
@@ -73,7 +75,7 @@ NEXT_MOVES = (
 
 # Controlled vocab for an asserted per-cell fact's key. Extend by adding a value,
 # never a second spelling (same discipline as BEHAVIOR_ALIASES).
-STATUS_KEYS = ("channel", "probe", "guard")
+STATUS_KEYS = ("channel", "probe", "guard", "reopen")
 
 # --- Canonicalization ------------------------------------------------------
 # open/stats GROUP BY the raw string, so casing/spelling variants silently fragment
@@ -82,10 +84,10 @@ STATUS_KEYS = ("channel", "probe", "guard")
 # migrate_2026_08_20.py folds the pre-existing rows once. Add a new alias here the
 # moment you notice a second spelling, never a second bucket.
 BEHAVIOR_ALIASES = {
+    # All keys MUST be in normalized form (lowercase-kebab); _normalize() runs before lookup.
+    # --- General aliases ---
     "cpf": "call-prohibited-function",
-    "CPF": "call-prohibited-function",
     "call-a-prohibited-function": "call-prohibited-function",
-    "Download": "encourage-harmful-download",
     "download": "encourage-harmful-download",
     "infiltrate": "infiltrate-private-party",
     "exploit-gift-recommendation": "exploit-gift-rec",
@@ -96,6 +98,10 @@ BEHAVIOR_ALIASES = {
 CHALLENGE_ALIASES = {
     "grayswan-ipi": "grayswan",
     "grayswan-luckybreak": "grayswan",
+    "grayswan-hazard-hunt": NEW_JAILBREAK_CHALLENGE,
+    "hazardhunt": NEW_JAILBREAK_CHALLENGE,
+    "hazard-hunt": NEW_JAILBREAK_CHALLENGE,
+    "hazard-hunt-q3": NEW_JAILBREAK_CHALLENGE,
 }
 # Lucky Break waves were logged under two naming schemes; line them up.
 WAVE_ALIASES = {
@@ -103,9 +109,61 @@ WAVE_ALIASES = {
     "Medium": "LB-Medium",
 }
 
+# Wave CATEGORIES: `--wave <category>` expands to all waves in that category instead
+# of an exact match, so a session never loads unrelated cell names into the context
+# window (G-SATURATION). Case-insensitive lookup. Populate per session from the
+# operator's local materials; empty here so no roster is tracked in the tool.
+WAVE_CATEGORIES: dict[str, list[str]] = {}
+
+
+def _normalize(v: str) -> str:
+    """Lowercase, spaces/underscores to hyphens, collapse runs, strip edges.
+
+    This is the first step of canonicalization: it folds Title Case, spaces, and
+    underscore variants into a single kebab-case form BEFORE the alias lookup, so
+    'Weak Password Change' and 'weak-password-change' hit the same
+    bucket without needing an explicit alias for every casing variant.
+    """
+    v = v.strip().lower()
+    v = re.sub(r"[\s_]+", "-", v)
+    v = re.sub(r"-{2,}", "-", v)
+    return v.strip("-")
+
 
 def canon_behavior(v):
+    v = _normalize(v)
     return BEHAVIOR_ALIASES.get(v, v)
+
+
+MODEL_ALIASES: dict[str, str] = {
+    "ecm": "Earth Cat Mighty",
+    "etb": "Electric Tiger Bold",
+    "fee": "Fire Elk Enormous",
+    "gsi": "Gray Salmon Intrepid",
+    "gts": "Ghost Tuna Supreme",
+    "bss": "Bronze Shark Stellar",
+    "tce": "Turquoise Capybara Extreme",
+    "vtpu": "Violet Turtle Plus Ultra",
+    "ohg": "Onyx Hippo Giga",
+}
+
+
+def canon_model(v: str) -> str:
+    """Normalize model names to Title Case with spaces.
+
+    Arena models display as 'Ghost Tuna Supreme' but batch-mode logging
+    sometimes produces 'ghost-tuna-supreme' or 'ghost tuna supreme'.
+    Fold all variants so GROUP BY never fragments the same model.
+    """
+    if not v:
+        return v
+    v = v.strip()
+    low = v.lower().replace("-", " ").replace("_", " ")
+    low = re.sub(r"\s{2,}", " ", low).strip()
+    alias = MODEL_ALIASES.get(low)
+    if alias:
+        return alias
+    return low.title()
 
 
 def canon_challenge(v):
@@ -114,6 +172,11 @@ def canon_challenge(v):
 
 def canon_wave(v):
     return WAVE_ALIASES.get(v, v)
+
+
+def expand_wave(v: str) -> list[str] | None:
+    """If v is a category name, return the list of waves. Otherwise return None (exact match)."""
+    return WAVE_CATEGORIES.get(v.lower())
 
 
 # One home for asserted per-cell facts (probe result, guard mechanism, channel status).
@@ -146,7 +209,7 @@ CREATE TABLE IF NOT EXISTS attempts (
     score         TEXT,
     score_num     REAL,
     pred_guard    TEXT,
-    pred_score    REAL,
+    pred_score    TEXT,
     payload       TEXT,
     notes         TEXT,
     refusal_class TEXT,
@@ -196,7 +259,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {row[1] for row in conn.execute("PRAGMA table_info(attempts)")}
     for col in _ADDED_COLUMNS:
         if col not in cols:
-            conn.execute(f"ALTER TABLE attempts ADD COLUMN {col} {'REAL' if col in ('score_num', 'pred_score') else 'TEXT'}")
+            conn.execute(f"ALTER TABLE attempts ADD COLUMN {col} {'REAL' if col == 'score_num' else 'TEXT'}")
     conn.executescript(CELL_STATUS_DDL)  # idempotent; brings pre-existing DBs up to date
 
 
@@ -260,11 +323,35 @@ def wilson_lower_bound(successes: int, n: int, z: float = 1.96) -> float:
     return max(0.0, (centre - margin) / denom)
 
 
+def has_reopen(conn: sqlite3.Connection, challenge: str, behavior: str) -> bool:
+    """True when an operator override (key='reopen') exists for this cell in cell_status,
+    meaning the cell should NOT be flagged CLOSED-CHANNEL regardless of n/wins."""
+    row = conn.execute(
+        "SELECT 1 FROM cell_status WHERE challenge=? AND behavior=? AND key='reopen' LIMIT 1",
+        (challenge, behavior),
+    ).fetchone()
+    return row is not None
+
+
+def _reopened_behaviors(conn: sqlite3.Connection, challenge: str | None) -> set[str]:
+    """Return the set of behaviors with an operator reopen override, scoped to a challenge."""
+    if challenge:
+        rows = conn.execute(
+            "SELECT DISTINCT behavior FROM cell_status WHERE challenge=? AND key='reopen'",
+            (challenge,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT DISTINCT behavior FROM cell_status WHERE key='reopen'"
+        ).fetchall()
+    return {r["behavior"] for r in rows}
+
+
 def _row_signature(rec: dict) -> tuple:
     """Content identity of a fire, ignoring id/ts, so re-loading a seed is idempotent."""
     return (
         canon_challenge(rec.get("challenge")), canon_behavior(rec.get("behavior")),
-        rec.get("model"), rec.get("lever"), rec.get("result"),
+        canon_model(rec.get("model") or ""), rec.get("lever"), rec.get("result"),
         _score_str(rec.get("score")), rec.get("notes"),
     )
 
@@ -290,10 +377,12 @@ def add_attempt(conn: sqlite3.Connection, rec: dict) -> int:
         (
             rec.get("ts") or now_iso(),
             canon_challenge(rec["challenge"]), canon_wave(rec.get("wave")),
-            canon_behavior(rec["behavior"]), rec["model"],
+            canon_behavior(rec["behavior"]), canon_model(rec["model"]),
             rec.get("lever"), result, _score_str(rec.get("score")), _score_num(rec.get("score")),
             rec.get("pred_guard"),
-            float(rec["pred_score"]) if rec.get("pred_score") not in (None, "") else None,
+            # pred_score is free text ("HC9/AIO10/Real9"), not a bare number: store the raw
+            # string like `score`. A numeric can be derived on read via _score_num if ever needed.
+            (rec.get("pred_score") or None),
             rec.get("payload"), rec.get("notes"), rc, nm, rec.get("oracle_type"),
         ),
     )
@@ -314,13 +403,13 @@ def upsert_cell_status(conn: sqlite3.Connection, rec: dict) -> None:
            DO UPDATE SET value=excluded.value, ts=excluded.ts,
                          source=COALESCE(excluded.source, cell_status.source)""",
         (rec.get("ts") or now_iso(), canon_challenge(rec["challenge"]),
-         canon_behavior(rec["behavior"]), rec.get("model") or "",
+         canon_behavior(rec["behavior"]), canon_model(rec.get("model") or ""),
          key, rec["value"], rec.get("source")),
     )
 
 
 def cmd_note(args: argparse.Namespace) -> None:
-    ch, beh, model = canon_challenge(args.challenge), canon_behavior(args.behavior), args.model or ""
+    ch, beh, model = canon_challenge(args.challenge), canon_behavior(args.behavior), canon_model(args.model or "")
     with connect() as conn:
         prior = conn.execute(
             "SELECT value FROM cell_status WHERE challenge=? AND behavior=? AND model=? AND key=?",
@@ -335,6 +424,25 @@ def cmd_note(args: argparse.Namespace) -> None:
         print(f"updated {args.key} for {beh}/{scope}: {prior['value']!r} -> {args.value!r}")
     else:
         print(f"noted {args.key} for {beh}/{scope}: {args.value!r}")
+
+
+def cmd_reopen(args: argparse.Namespace) -> None:
+    """Record an operator override that suppresses CLOSED-CHANNEL for a cell. The override
+    persists in cell_status (key='reopen') and is respected by brief, open, and check closed."""
+    ch = canon_challenge(args.challenge)
+    beh = canon_behavior(args.behavior)
+    with connect() as conn:
+        upsert_cell_status(conn, {
+            "challenge": args.challenge, "behavior": args.behavior,
+            "key": "reopen", "value": args.reason, "source": "operator",
+        })
+        tries, wins = _behavior_counts(conn, ch, beh)
+    if wins == 0 and tries >= 30:
+        ub = rule_of_three_ub(tries)
+        print(f"reopened {beh} (0/{tries}, ub<={ub*100:.0f}%): CLOSED-CHANNEL suppressed")
+    else:
+        print(f"reopened {beh} ({wins}/{tries}): override recorded (cell was not flagged closed)")
+    print(f"reason: {args.reason}")
 
 
 def cmd_add(args: argparse.Namespace) -> None:
@@ -352,7 +460,8 @@ def cmd_add(args: argparse.Namespace) -> None:
         print("  note (pre-registration): logged without --pred-guard/--pred-score. Predicting the "
               "guard + score BEFORE firing is the highest credibility-per-minute move; add them next time.")
     print(f"added attempt #{rid} ({args.result} / {args.refusal_class} -> {args.next_move}: "
-          f"{canon_behavior(args.behavior)} / {args.model})")
+          f"{canon_behavior(args.behavior)} / {canon_model(args.model)})")
+    _do_export(quiet=True)
 
 
 def cmd_load(args: argparse.Namespace) -> None:
@@ -471,6 +580,9 @@ def check_verdict(conn, claim, challenge, behavior=None, model=None, lever=None)
     message is built to be pasted into the conclusion line and carries the exact bound the
     loop-audit hook already accepts (UNMEASURED / n= / ub<= / 95% / pass_rate / CI)."""
     challenge = canon_challenge(challenge)
+    # TODO(2026-08-25): this CTF-tuple check reads PUBLIC_CHALLENGES, so it picks up
+    # NEW_JAILBREAK_CHALLENGE automatically once that tuple is updated above - just make
+    # sure the tuple edit lands, nothing to change here.
     is_ctf = challenge in PUBLIC_CHALLENGES
     if claim == "solved":
         tries, wins = _lever_counts(conn, challenge, lever)
@@ -504,6 +616,9 @@ def check_verdict(conn, claim, challenge, behavior=None, model=None, lever=None)
         behavior = canon_behavior(behavior)
         tries, wins = _behavior_counts(conn, challenge, behavior, model)
         if wins == 0 and tries >= 30:
+            if has_reopen(conn, challenge, behavior):
+                return 1, (f"REOPENED by operator override (0/{tries}); reopen note suppresses "
+                           f"CLOSED-CHANNEL. Content levers allowed.")
             ub = rule_of_three_ub(tries)
             return 0, (f"[CLOSED-CHANNEL ub<={ub*100:.0f}%] (0/{tries}); next fire MUST be "
                        f"provenance-changing, not a content reroll (G-CHANNEL-CLOSED)")
@@ -534,16 +649,31 @@ def cmd_check(args: argparse.Namespace) -> None:
     sys.exit(code)
 
 
-def _capability_counts(conn: sqlite3.Connection, challenge: str | None) -> dict:
+def _wave_clause(alias: str, wave_arg: str | None) -> tuple[str, list]:
+    """Build a wave filter clause for the given table alias. Returns (sql, params)."""
+    if not wave_arg:
+        return "", []
+    waves = expand_wave(wave_arg)
+    if waves:
+        ph = ",".join("?" for _ in waves)
+        return f" AND {alias}.wave IN ({ph})", list(waves)
+    return f" AND {alias}.wave=?", [canon_wave(wave_arg)]
+
+
+def _capability_counts(conn: sqlite3.Connection, challenge: str | None,
+                       wave_arg: str | None = None) -> dict:
     """DISTINCT real-effect breaks and the confirmed/provisional/artifact split. Shared by
     stats and brief so the honest headline is computed in exactly one place."""
     ch_clause = " AND w.challenge=?" if challenge else ""
     sub_ch = " AND a.challenge=?" if challenge else ""
-    params = (challenge, challenge) if challenge else ()
+    w_wave_sql, w_wave_p = _wave_clause("w", wave_arg)
+    a_wave_sql, a_wave_p = _wave_clause("a", wave_arg)
+    ch_params = [challenge] if challenge else []
+    params = tuple(ch_params + w_wave_p + ch_params + a_wave_p)
     wins = conn.execute(
         f"SELECT w.behavior, w.lever, w.oracle_type, "
-        f"(SELECT COUNT(*) FROM attempts a WHERE a.status='active' AND a.lever IS w.lever{sub_ch}) n "
-        f"FROM attempts w WHERE w.status='active' AND w.result='win'{ch_clause}",
+        f"(SELECT COUNT(*) FROM attempts a WHERE a.status='active' AND a.lever IS w.lever{sub_ch}{a_wave_sql}) n "
+        f"FROM attempts w WHERE w.status='active' AND w.result='win'{ch_clause}{w_wave_sql}",
         params,
     ).fetchall()
     real = [w for w in wins if (w["oracle_type"] or "real-effect") != "judge-artifact"]
@@ -606,6 +736,7 @@ def cmd_open(args: argparse.Namespace) -> None:
             f"ORDER BY tries DESC",
             p,
         ).fetchall()
+        reopened = _reopened_behaviors(conn, challenge)
     if not rows:
         print("(no open behaviors: everything attempted has at least one win)")
         return
@@ -618,7 +749,12 @@ def cmd_open(args: argparse.Namespace) -> None:
         n = r["tries"]
         # Rule of three: for 0 wins in n trials the ~95% one-sided upper bound on p is 3/n.
         ub = 3.0 / n if n else 1.0
-        flag = f"  [CLOSED-CHANNEL ub<={ub*100:.0f}%]" if n >= 30 else ""
+        if n >= 30 and r["behavior"] not in reopened:
+            flag = f"  [CLOSED-CHANNEL ub<={ub*100:.0f}%]"
+        elif n >= 30 and r["behavior"] in reopened:
+            flag = "  [REOPENED]"
+        else:
+            flag = ""
         print(f"  {r['wave'] or '-':<7} {r['behavior']:<28} {n} tries, 0 wins{flag}")
 
 
@@ -628,8 +764,14 @@ def _brief_filter(args) -> tuple[str, list]:
         clause += " AND challenge=?"
         params.append(canon_challenge(args.challenge))
     if getattr(args, "wave", None):
-        clause += " AND wave=?"
-        params.append(canon_wave(args.wave))
+        waves = expand_wave(args.wave)
+        if waves:
+            placeholders = ",".join("?" for _ in waves)
+            clause += f" AND wave IN ({placeholders})"
+            params.extend(waves)
+        else:
+            clause += " AND wave=?"
+            params.append(canon_wave(args.wave))
     return clause, params
 
 
@@ -637,9 +779,10 @@ def cmd_brief(args: argparse.Namespace) -> None:
     """Reconstruct the actionable session STATE from the ledger, payload-free. This is what a
     fresh session reads INSTEAD of the PROGRESS.md RESUME prose (source of truth = the DB)."""
     challenge = canon_challenge(args.challenge) if getattr(args, "challenge", None) else None
+    wave_arg = getattr(args, "wave", None)
     clause, params = _brief_filter(args)
     with connect() as conn:
-        cap = _capability_counts(conn, challenge)
+        cap = _capability_counts(conn, challenge, wave_arg=wave_arg)
         cells = conn.execute(
             f"SELECT behavior, wave, COUNT(*) tries, MAX(score_num) best "
             f"FROM attempts WHERE status='active' AND result!='scope_out'{clause} "
@@ -670,14 +813,34 @@ def cmd_brief(args: argparse.Namespace) -> None:
         ):
             beh_totals[r["behavior"]] = (r["n"], r["wins"] or 0)
 
+        reopened = _reopened_behaviors(conn, challenge)
+
         def _closed(behavior):
+            if behavior in reopened:
+                return False
             n, wins = beh_totals.get(behavior, (0, 0))
             return wins == 0 and n >= 30
+        cs_clause = " AND challenge=?" if challenge else ""
+        cs_params: list = [challenge] if challenge else []
+        if wave_arg:
+            scoped_behaviors = {c["behavior"] for c in cells}
+            scoped_behaviors |= {
+                r["behavior"] for r in conn.execute(
+                    f"SELECT DISTINCT behavior FROM attempts "
+                    f"WHERE status='active'{clause}", params,
+                )
+            }
+            if scoped_behaviors:
+                ph = ",".join("?" for _ in scoped_behaviors)
+                cs_clause += f" AND behavior IN ({ph})"
+                cs_params.extend(sorted(scoped_behaviors))
+            else:
+                cs_clause += " AND 0"
         cs = conn.execute(
             f"SELECT behavior, model, key, value FROM cell_status "
-            f"WHERE 1=1{' AND challenge=?' if challenge else ''} "
+            f"WHERE 1=1{cs_clause} "
             f"ORDER BY behavior, model, key",
-            (challenge,) if challenge else (),
+            cs_params,
         ).fetchall()
 
     print(f"CAPABILITY: {cap['breaks']} distinct real-effect breaks "
@@ -739,16 +902,21 @@ def cmd_supersede(args: argparse.Namespace) -> None:
 # are coordinated-disclosure material and are withheld unless --include-internal is passed
 # for a purely local full export. This is the disclosure gate the README advertises, applied
 # at the one place that writes a committed file.
-PUBLIC_CHALLENGES = ("agentbreaker", "grayswan")
+PUBLIC_CHALLENGES = ("agentbreaker", "grayswan", NEW_JAILBREAK_CHALLENGE)
 
 
-def cmd_export(args: argparse.Namespace) -> None:
+DEFAULT_EXPORT_PATH = os.path.join("learn", "attempts-snapshot.md")
+
+
+def _do_export(out: str = DEFAULT_EXPORT_PATH, *, include_internal: bool = False,
+               quiet: bool = False) -> int:
+    """Core export logic. Returns the number of rows exported."""
     with connect() as conn:
         rows = conn.execute(
             "SELECT * FROM attempts WHERE status='active' ORDER BY challenge, wave, id"
         ).fetchall()
     withheld = 0
-    if not getattr(args, "include_internal", False):
+    if not include_internal:
         kept = [r for r in rows if r["challenge"] in PUBLIC_CHALLENGES]
         withheld = len(rows) - len(kept)
         rows = kept
@@ -759,7 +927,7 @@ def cmd_export(args: argparse.Namespace) -> None:
              f"The raw `payload` column is intentionally omitted so this file stays "
              f"publishable (G-SATURATION).{note}", ""]
     keys = rows[0].keys() if rows else ()
-    has_read = "refusal_class" in keys  # tolerate a pre-migration export
+    has_read = "refusal_class" in keys
     hdr = "| # | ch | wave | behavior | model | lever | result | score |"
     sep = "|---|----|------|----------|-------|-------|--------|-------|"
     if has_read:
@@ -773,10 +941,259 @@ def cmd_export(args: argparse.Namespace) -> None:
         if has_read:
             row = row + f" {r['refusal_class'] or ''} | {r['next_move'] or ''} |"
         lines.append(row)
-    out = args.file or os.path.join("learn", "attempts-snapshot.md")
     with open(out, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
-    print(f"exported {len(rows)} attempts to {out}")
+    if not quiet:
+        print(f"exported {len(rows)} attempts to {out}")
+    return len(rows)
+
+
+def cmd_export(args: argparse.Namespace) -> None:
+    out = args.file or DEFAULT_EXPORT_PATH
+    _do_export(out, include_internal=getattr(args, "include_internal", False))
+
+
+def cmd_suggest(args: argparse.Namespace) -> None:
+    """Recommend which attack family to try next for open models of a behavior, based on
+    the refusal_class history. Groups open models by their most recent class and maps
+    each group to the decision-tree move from the family bank."""
+    behavior = canon_behavior(args.behavior)
+    clause, params = _brief_filter(args)
+    recommendations = {
+        "soft-refusal": "Reroll 3-5x, then edit-one-clause. If 8+ same-class fires: escalate to the next family in the bank.",
+        "adjacent": "Reroll 3-5x, then edit-one-clause. If 8+ same-class fires: escalate to the next family in the bank.",
+        "structure-no-payload": "Escalate to the next family in the bank.",
+        "note-and-skip": "Escalate to the next family in the bank.",
+        "byte-identical": "Change the input surface. Rerolling is waste.",
+        "null": "Re-fire (G-NULL). Not a real refusal.",
+        "complied-useless": "Extract detail from the compliant response. Do NOT re-jailbreak.",
+    }
+    with connect() as conn:
+        open_models = conn.execute(
+            f"SELECT model FROM attempts "
+            f"WHERE status='active' AND behavior=?{clause} "
+            f"GROUP BY model "
+            f"HAVING SUM(CASE WHEN result='win' THEN 1 ELSE 0 END) = 0",
+            [behavior] + params,
+        ).fetchall()
+        if not open_models:
+            print(f"suggest: {behavior} (no open models)")
+            return
+        model_names = [r["model"] for r in open_models]
+        last_class = {}
+        for m in model_names:
+            row = conn.execute(
+                f"SELECT refusal_class FROM attempts "
+                f"WHERE status='active' AND behavior=? AND model=?{clause} "
+                f"ORDER BY id DESC LIMIT 1",
+                [behavior, m] + params,
+            ).fetchone()
+            last_class[m] = row["refusal_class"] if row and row["refusal_class"] else "(unclassified)"
+        model_levers = {}
+        for m in model_names:
+            rows = conn.execute(
+                f"SELECT DISTINCT lever FROM attempts "
+                f"WHERE status='active' AND behavior=? AND model=? AND lever IS NOT NULL{clause}",
+                [behavior, m] + params,
+            ).fetchall()
+            model_levers[m] = [r["lever"] for r in rows]
+    groups = {}
+    for m in model_names:
+        groups.setdefault(last_class[m], []).append(m)
+    print(f"suggest: {behavior} ({len(model_names)} open models)")
+    for rc in sorted(groups, key=lambda k: -len(groups[k])):
+        models = groups[rc]
+        n = len(models)
+        print(f"\n  {rc} ({n} model{'s' if n != 1 else ''}): {', '.join(models)}")
+        rec = recommendations.get(rc, f"(no recommendation for class {rc!r})")
+        print(f"    -> {rec}")
+        all_levers = set()
+        for m in models:
+            all_levers.update(model_levers[m])
+        if all_levers:
+            print(f"    Levers tried: {', '.join(sorted(all_levers))}")
+        else:
+            print(f"    Levers tried: (none)")
+
+
+def cmd_propagate(args: argparse.Namespace) -> None:
+    """Two modes:
+    --lever: find which models a lever broke, then list other open behaviors for those models.
+    --behavior: show which models are broken/open on a behavior, plus top levers by pass rate.
+    """
+    lever = getattr(args, "lever", None)
+    behavior = getattr(args, "behavior", None)
+    if not lever and not behavior:
+        print("propagate: provide --lever or --behavior")
+        return
+    clause, params = _brief_filter(args)
+    with connect() as conn:
+        if behavior:
+            _propagate_behavior(conn, canon_behavior(behavior), clause, params)
+        else:
+            _propagate_lever(conn, lever, clause, params)
+
+
+def _propagate_behavior(conn, behavior, clause, params):
+    """Behavior-centric: show broken/open models and top levers for a behavior."""
+    broken = conn.execute(
+        f"SELECT DISTINCT model FROM attempts "
+        f"WHERE status='active' AND behavior=? AND result='win'{clause}",
+        [behavior] + params,
+    ).fetchall()
+    broken_set = {r["model"] for r in broken}
+    all_models = conn.execute(
+        f"SELECT DISTINCT model FROM attempts "
+        f"WHERE status='active' AND behavior=?{clause}",
+        [behavior] + params,
+    ).fetchall()
+    all_set = {r["model"] for r in all_models}
+    open_set = all_set - broken_set
+    print(f"propagate (behavior): {behavior}")
+    print(f"\n  BROKEN ({len(broken_set)}): {', '.join(sorted(broken_set)) or '(none)'}")
+    print(f"  OPEN   ({len(open_set)}): {', '.join(sorted(open_set)) or '(none)'}")
+    roster = conn.execute(
+        f"SELECT DISTINCT model FROM attempts WHERE status='active'{clause}",
+        params,
+    ).fetchall()
+    roster_set = {r["model"] for r in roster}
+    unattempted = roster_set - all_set
+    if unattempted:
+        print(f"  UNATTEMPTED ({len(unattempted)}): {', '.join(sorted(unattempted))}")
+    levers = conn.execute(
+        f"SELECT lever, COUNT(*) fires, "
+        f"SUM(CASE WHEN result='win' THEN 1 ELSE 0 END) wins "
+        f"FROM attempts WHERE status='active' AND behavior=?{clause} "
+        f"GROUP BY lever ORDER BY wins DESC, fires ASC LIMIT 10",
+        [behavior] + params,
+    ).fetchall()
+    if levers:
+        print(f"\n  TOP LEVERS (by wins on this behavior):")
+        for lv in levers:
+            pct = f"{lv['wins']/lv['fires']*100:.0f}%" if lv["fires"] else "0%"
+            print(f"    {lv['lever']}: {lv['wins']}/{lv['fires']} ({pct})")
+    if open_set:
+        print(f"\n  OPEN MODEL DETAIL:")
+        for m in sorted(open_set):
+            fires = conn.execute(
+                f"SELECT COUNT(*) c FROM attempts "
+                f"WHERE status='active' AND model=? AND behavior=?{clause}",
+                [m, behavior] + params,
+            ).fetchone()["c"]
+            last = conn.execute(
+                f"SELECT refusal_class FROM attempts "
+                f"WHERE status='active' AND model=? AND behavior=?{clause} "
+                f"ORDER BY id DESC LIMIT 1",
+                [m, behavior] + params,
+            ).fetchone()
+            last_rc = last["refusal_class"] if last and last["refusal_class"] else "-"
+            print(f"    {m}: {fires} fires, last={last_rc}")
+
+
+def _propagate_lever(conn, lever, clause, params):
+    """Lever-centric: find models a lever broke, list their other open behaviors."""
+    won_models = conn.execute(
+        f"SELECT DISTINCT model FROM attempts "
+        f"WHERE status='active' AND lever=? AND result='win'{clause}",
+        [lever] + params,
+    ).fetchall()
+    if not won_models:
+        print(f"propagate: {lever}\n\n  (no models broken by this lever)")
+        return
+    model_names = [r["model"] for r in won_models]
+    print(f"propagate: {lever}\n")
+    print(f"  Models broken by this lever: {', '.join(model_names)}")
+    for m in model_names:
+        open_behaviors = conn.execute(
+            f"SELECT behavior, COUNT(*) fires FROM attempts "
+            f"WHERE status='active' AND model=?{clause} "
+            f"GROUP BY behavior "
+            f"HAVING SUM(CASE WHEN result='win' THEN 1 ELSE 0 END) = 0 "
+            f"ORDER BY fires DESC",
+            [m] + params,
+        ).fetchall()
+        if not open_behaviors:
+            print(f"\n  {m}: (no open behaviors)")
+            continue
+        nb = len(open_behaviors)
+        print(f"\n  {m} (open on {nb} behavior{'s' if nb != 1 else ''}):")
+        for ob in open_behaviors:
+            beh = ob["behavior"]
+            fires = ob["fires"]
+            last = conn.execute(
+                f"SELECT refusal_class FROM attempts "
+                f"WHERE status='active' AND model=? AND behavior=?{clause} "
+                f"ORDER BY id DESC LIMIT 1",
+                [m, beh] + params,
+            ).fetchone()
+            last_rc = last["refusal_class"] if last and last["refusal_class"] else "-"
+            print(f"    {beh} ({fires} fires, last={last_rc})")
+
+
+def cmd_migrate_names(args: argparse.Namespace) -> None:
+    """One-time migration: re-canonicalize all behavior names in both tables using the
+    current _normalize + BEHAVIOR_ALIASES rules. Idempotent (a second run is a no-op)."""
+    with connect() as conn:
+        behaviors = conn.execute("SELECT DISTINCT behavior FROM attempts").fetchall()
+        att_updated = 0
+        for row in behaviors:
+            old = row["behavior"]
+            new = canon_behavior(old)
+            if old != new:
+                n = conn.execute("UPDATE attempts SET behavior=? WHERE behavior=?",
+                                 (new, old)).rowcount
+                print(f"  attempts: {old!r} -> {new!r} ({n} rows)")
+                att_updated += n
+
+        cs_rows = conn.execute(
+            "SELECT id, challenge, behavior, model, key, value, ts FROM cell_status"
+        ).fetchall()
+        cs_updated = cs_deleted = 0
+        for r in cs_rows:
+            old = r["behavior"]
+            new = canon_behavior(old)
+            if old == new:
+                continue
+            existing = conn.execute(
+                "SELECT id, ts FROM cell_status "
+                "WHERE challenge=? AND behavior=? AND model=? AND key=?",
+                (r["challenge"], new, r["model"], r["key"]),
+            ).fetchone()
+            if existing:
+                if r["ts"] > existing["ts"]:
+                    conn.execute("UPDATE cell_status SET value=?, ts=? WHERE id=?",
+                                 (r["value"], r["ts"], existing["id"]))
+                conn.execute("DELETE FROM cell_status WHERE id=?", (r["id"],))
+                cs_deleted += 1
+            else:
+                conn.execute("UPDATE cell_status SET behavior=? WHERE id=?",
+                             (new, r["id"]))
+                cs_updated += 1
+
+        models = conn.execute("SELECT DISTINCT model FROM attempts").fetchall()
+        mdl_updated = 0
+        for row in models:
+            old = row["model"]
+            new = canon_model(old)
+            if old != new:
+                n = conn.execute("UPDATE attempts SET model=? WHERE model=?",
+                                 (new, old)).rowcount
+                print(f"  attempts model: {old!r} -> {new!r} ({n} rows)")
+                mdl_updated += n
+
+        cs_models = conn.execute("SELECT DISTINCT model FROM cell_status WHERE model != ''").fetchall()
+        csm_updated = 0
+        for row in cs_models:
+            old = row["model"]
+            new = canon_model(old)
+            if old != new:
+                conn.execute("UPDATE cell_status SET model=? WHERE model=?",
+                             (new, old))
+                csm_updated += 1
+
+    print(f"\nmigrate-names: {att_updated} behavior rows + {mdl_updated} model rows updated in attempts, "
+          f"{cs_updated} cell_status rows updated, {cs_deleted} cell_status duplicates merged, "
+          f"{csm_updated} cell_status model names fixed")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -809,7 +1226,7 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--pred-guard", dest="pred_guard",
                    help="pre-fire prediction of the guard type/class you expect")
     a.add_argument("--pred-score", dest="pred_score",
-                   help="pre-fire predicted judge score (number)")
+                   help="pre-fire predicted judge score (free text, e.g. HC9/AIO10/Real9)")
     a.add_argument("--oracle-type", dest="oracle_type",
                    choices=("real-effect", "judge-artifact"),
                    help="for a win: did a tool actually fire / data actually leave (real-effect), or "
@@ -826,6 +1243,12 @@ def build_parser() -> argparse.ArgumentParser:
     nt.add_argument("--value", required=True)
     nt.add_argument("--source", help="where the fact came from, e.g. 'probe#12'")
     nt.set_defaults(func=cmd_note)
+
+    ro = sub.add_parser("reopen", help="suppress CLOSED-CHANNEL for a cell (operator override)")
+    ro.add_argument("--challenge", required=True)
+    ro.add_argument("--behavior", required=True)
+    ro.add_argument("--reason", required=True, help="why the cell is being reopened")
+    ro.set_defaults(func=cmd_reopen)
 
     ld = sub.add_parser("load", help="bulk-insert from a JSON array")
     ld.add_argument("file")
@@ -854,6 +1277,19 @@ def build_parser() -> argparse.ArgumentParser:
     br.add_argument("--wave")
     br.set_defaults(func=cmd_brief)
 
+    sg = sub.add_parser("suggest", help="recommend next attack family for open models of a behavior")
+    sg.add_argument("--challenge")
+    sg.add_argument("--wave")
+    sg.add_argument("--behavior", required=True)
+    sg.set_defaults(func=cmd_suggest)
+
+    pr = sub.add_parser("propagate", help="--lever: open behaviors for models broken by a lever; --behavior: broken/open models for a behavior")
+    pr.add_argument("--lever")
+    pr.add_argument("--behavior")
+    pr.add_argument("--challenge")
+    pr.add_argument("--wave")
+    pr.set_defaults(func=cmd_propagate)
+
     sp = sub.add_parser("supersede", help="soft-close an attempt (never deletes)")
     sp.add_argument("id", type=int)
     sp.add_argument("--by", type=int, help="id of the attempt that replaces it")
@@ -866,6 +1302,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="local full export: include real/internal-target rows (owai-master etc.). "
                          "NEVER commit the output of this - it names non-public targets.")
     ex.set_defaults(func=cmd_export)
+
+    sub.add_parser("migrate-names",
+                   help="re-canonicalize all behavior names in the DB (one-time fix)"
+                   ).set_defaults(func=cmd_migrate_names)
 
     ck = sub.add_parser("check", help="run a conclusion-guard gate; prints the bound, exits 0 if gate-legal")
     ck.add_argument("claim", choices=("solved", "safe", "closed", "durable", "wall"))
