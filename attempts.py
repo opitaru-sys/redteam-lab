@@ -803,6 +803,14 @@ def _brief_filter(args) -> tuple[str, list]:
     return clause, params
 
 
+def _conversation_rows(conn, clause, params):
+    return conn.execute(
+        f"SELECT conversation_id, turn_index, model, behavior, result, "
+        f"refusal_class, score_num FROM attempts "
+        f"WHERE status='active' AND conversation_id IS NOT NULL{clause} "
+        f"ORDER BY conversation_id, turn_index", params).fetchall()
+
+
 def cmd_brief(args: argparse.Namespace) -> None:
     """Reconstruct the actionable session STATE from the ledger, payload-free. This is what a
     fresh session reads INSTEAD of the PROGRESS.md RESUME prose (source of truth = the DB)."""
@@ -870,6 +878,7 @@ def cmd_brief(args: argparse.Namespace) -> None:
             f"ORDER BY behavior, model, key",
             cs_params,
         ).fetchall()
+        convos = _conversation_rows(conn, clause, params)
 
     print(f"CAPABILITY: {cap['breaks']} distinct real-effect breaks "
           f"({cap['confirmed']} confirmed, {cap['provisional']} provisional, "
@@ -909,6 +918,18 @@ def cmd_brief(args: argparse.Namespace) -> None:
         print("  (none noted)")
     for r in cs:
         print(f"  {r['behavior']:<28} {r['model'] or '(all)':<20} {r['key']}={r['value']}")
+
+    print("\nCONVERSATIONS (multi-turn attempts, turn order; * = winning turn):")
+    if not convos:
+        print("  (none logged)")
+    current = None
+    for r in convos:
+        if r["conversation_id"] != current:
+            current = r["conversation_id"]
+            print(f"  {current} [{r['behavior']} / {r['model']}]")
+        mark = "*" if r["result"] == "win" else " "
+        sc = f"{r['score_num']:.0f}" if r["score_num"] is not None else "-"
+        print(f"    {mark} turn {r['turn_index']}: {r['refusal_class'] or '-'} score={sc}")
 
 
 def cmd_supersede(args: argparse.Namespace) -> None:

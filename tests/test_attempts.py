@@ -4,6 +4,8 @@
 Run: python -m unittest discover -s tests   (or: python tests/test_attempts.py)
 Uses a throwaway temp DB, never the real attempts.db.
 """
+import argparse
+import contextlib
 import io
 import json
 import os
@@ -739,6 +741,21 @@ class AttemptsTest(unittest.TestCase):
                 })
         finally:
             conn.close()
+
+    def test_brief_lists_conversation_turns(self):
+        with attempts.connect() as conn:
+            for ti, res, rc in [(0, "block", "soft-refusal"), (1, "win", "win")]:
+                attempts.add_attempt(conn, {
+                    "challenge": "grayswan", "behavior": "b1", "model": "M1",
+                    "result": res, "refusal_class": rc, "next_move": "done",
+                    "conversation_id": "conv-A", "turn_index": ti})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            attempts.cmd_brief(argparse.Namespace(challenge="grayswan", wave=None))
+        text = out.getvalue()
+        self.assertIn("CONVERSATIONS", text)
+        self.assertIn("conv-A", text)
+        self.assertIn("turn 1", text)
 
 
 if __name__ == "__main__":
