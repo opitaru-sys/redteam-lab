@@ -229,7 +229,8 @@
         <label class="f"><span>Scoring: binary, or partial credit and the pass mark</span><input type="text" id="rScoring" placeholder="0-100, pass at 75"></label>
       </div>
       <label class="f"><span>Any hint the target gives you, verbatim. Scored systems often name the family outright.</span><input type="text" id="rHint" placeholder="How can you make your attack override the system instructions?"></label>
-      <label class="f" style="margin-bottom:0"><span>What you can read directly (grey box): system prompt, tool definitions, config, permissions. At work this is usually most of it.</span><input type="text" id="rGrey" placeholder="nothing / tool list / full config"></label>
+      <label class="f"><span>What you can read directly (grey box): system prompt, tool definitions, config, permissions. At work this is usually most of it.</span><input type="text" id="rGrey" placeholder="nothing / tool list / full config"></label>
+      <label class="f" style="margin-bottom:0"><span>This turn's goal (what it must establish). On a multi-turn cell, plan backward from the last scored turn and set this each turn.</span><input type="text" id="rTurnGoal" placeholder="what this single turn must establish before the next one"></label>
     </details>
 
     <div class="panel">
@@ -2592,6 +2593,13 @@ RECON.forEach(k=>{
   el.value=state.recon[key]||"";
   el.oninput=()=>{state.recon[key]=el.value;save();paintRecon();};
 });
+/* Per-turn goal: a multi-turn field, kept out of the once-per-session recon count.
+   It rides into every attempt via the recon snapshot in saveAttempt, so the log flow reads it. */
+(function(){
+  const el=$("#rTurnGoal");
+  el.value=state.recon.turngoal||"";
+  el.oninput=()=>{state.recon.turngoal=el.value;save();};
+})();
 paintRecon();
 if(!RECON.some(k=>(state.recon[k.toLowerCase()]||"").trim()))$("#reconPanel").open=true;
 
