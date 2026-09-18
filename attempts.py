@@ -229,7 +229,14 @@ CREATE INDEX IF NOT EXISTS idx_attempts_result ON attempts(result);
 # oracle_type distinguishes a REAL-EFFECT win (a tool actually fired / data actually left) from a
 # JUDGE-ARTIFACT win (the judge scored high with no underlying action, e.g. it read a composed
 # {fill} as the answer after an empty final turn). Only real-effect wins count as capability.
-_ADDED_COLUMNS = ("refusal_class", "next_move", "score_num", "pred_guard", "pred_score", "oracle_type")
+# conversation_id/turn_index/turn_goal/latency_ms carry the multi-turn conversation unit: which
+# turns belong to the same conversation, this turn's position and intent, and how long it took.
+_ADDED_COLUMNS = ("refusal_class", "next_move", "score_num", "pred_guard",
+                  "pred_score", "oracle_type", "conversation_id", "turn_index",
+                  "turn_goal", "latency_ms")
+
+# Explicit SQLite type per added column; anything not listed here defaults to TEXT.
+_COLUMN_TYPES = {"score_num": "REAL", "turn_index": "INTEGER", "latency_ms": "REAL"}
 
 # A win-lever fired fewer than this many times is provisional (a single lucky draw on a stochastic
 # guard is not a confirmed technique - the G-SOLVE bar). Used only for honest reporting, computed
@@ -259,7 +266,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {row[1] for row in conn.execute("PRAGMA table_info(attempts)")}
     for col in _ADDED_COLUMNS:
         if col not in cols:
-            conn.execute(f"ALTER TABLE attempts ADD COLUMN {col} {'REAL' if col == 'score_num' else 'TEXT'}")
+            col_type = _COLUMN_TYPES.get(col, "TEXT")
+            conn.execute(f"ALTER TABLE attempts ADD COLUMN {col} {col_type}")
     conn.executescript(CELL_STATUS_DDL)  # idempotent; brings pre-existing DBs up to date
 
 
@@ -348,11 +356,15 @@ def _reopened_behaviors(conn: sqlite3.Connection, challenge: str | None) -> set[
 
 
 def _row_signature(rec: dict) -> tuple:
-    """Content identity of a fire, ignoring id/ts, so re-loading a seed is idempotent."""
+    """Content identity of a fire, ignoring id/ts, so re-loading a seed is idempotent.
+    conversation_id + turn_index are part of the identity so two turns of the same
+    conversation (same challenge/behavior/model/lever/result/score/notes) are not deduped
+    against each other."""
     return (
         canon_challenge(rec.get("challenge")), canon_behavior(rec.get("behavior")),
         canon_model(rec.get("model") or ""), rec.get("lever"), rec.get("result"),
         _score_str(rec.get("score")), rec.get("notes"),
+        rec.get("conversation_id"), rec.get("turn_index"),
     )
 
 
@@ -372,8 +384,9 @@ def add_attempt(conn: sqlite3.Connection, rec: dict) -> int:
     cur = conn.execute(
         """INSERT INTO attempts
            (ts, challenge, wave, behavior, model, lever, result, score, score_num,
-            pred_guard, pred_score, payload, notes, refusal_class, next_move, oracle_type)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            pred_guard, pred_score, payload, notes, refusal_class, next_move, oracle_type,
+            conversation_id, turn_index, turn_goal, latency_ms)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             rec.get("ts") or now_iso(),
             canon_challenge(rec["challenge"]), canon_wave(rec.get("wave")),
@@ -384,6 +397,8 @@ def add_attempt(conn: sqlite3.Connection, rec: dict) -> int:
             # string like `score`. A numeric can be derived on read via _score_num if ever needed.
             (rec.get("pred_score") or None),
             rec.get("payload"), rec.get("notes"), rc, nm, rec.get("oracle_type"),
+            rec.get("conversation_id"), rec.get("turn_index"),
+            rec.get("turn_goal"), rec.get("latency_ms"),
         ),
     )
     return cur.lastrowid
@@ -453,6 +468,8 @@ def cmd_add(args: argparse.Namespace) -> None:
         "refusal_class": args.refusal_class, "next_move": args.next_move,
         "pred_guard": args.pred_guard, "pred_score": args.pred_score,
         "oracle_type": args.oracle_type,
+        "conversation_id": args.conversation_id, "turn_index": args.turn_index,
+        "turn_goal": args.turn_goal, "latency_ms": args.latency_ms,
     }
     with connect() as conn:
         rid = add_attempt(conn, rec)
@@ -1233,6 +1250,14 @@ def build_parser() -> argparse.ArgumentParser:
                         "did the judge score high with no underlying action (judge-artifact)?")
     a.add_argument("--payload", help="literal text, or a path to a file to read")
     a.add_argument("--notes")
+    a.add_argument("--conversation-id", dest="conversation_id",
+                   help="group id for a multi-turn attempt (same across its turns)")
+    a.add_argument("--turn-index", dest="turn_index", type=int,
+                   help="0-based position of this turn in the conversation")
+    a.add_argument("--turn-goal", dest="turn_goal",
+                   help="what this turn is meant to establish (process language)")
+    a.add_argument("--latency-ms", dest="latency_ms", type=float,
+                   help="time from first prompt to judged result, for speed rank")
     a.set_defaults(func=cmd_add)
 
     nt = sub.add_parser("note", help="record an asserted per-cell fact (channel/probe/guard)")

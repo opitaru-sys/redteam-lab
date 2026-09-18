@@ -585,6 +585,30 @@ class AttemptsTest(unittest.TestCase):
         self.assertNotIn("Call A Prohibited Function", names)
         self.assertNotIn("Exploit Gift Recommendation", names)
 
+    def test_conversation_and_latency_columns_roundtrip(self):
+        with attempts.connect() as conn:
+            rid = attempts.add_attempt(conn, {
+                "challenge": "grayswan", "behavior": "b1", "model": "M1",
+                "result": "win", "refusal_class": "win", "next_move": "done",
+                "conversation_id": "c-123", "turn_index": 3,
+                "turn_goal": "land the scored ask", "latency_ms": 1500.0,
+            })
+            row = conn.execute(
+                "SELECT conversation_id, turn_index, turn_goal, latency_ms "
+                "FROM attempts WHERE id=?", (rid,)).fetchone()
+        self.assertEqual(row["conversation_id"], "c-123")
+        self.assertEqual(row["turn_index"], 3)
+        self.assertEqual(row["turn_goal"], "land the scored ask")
+        self.assertEqual(row["latency_ms"], 1500.0)
+
+    def test_migrate_is_idempotent_for_new_columns(self):
+        with attempts.connect() as conn:
+            attempts._migrate(conn)
+            attempts._migrate(conn)
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(attempts)")}
+        for c in ("conversation_id", "turn_index", "turn_goal", "latency_ms"):
+            self.assertIn(c, cols)
+
 
 if __name__ == "__main__":
     unittest.main()
