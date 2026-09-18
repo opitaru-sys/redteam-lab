@@ -206,6 +206,22 @@ word on a line with no bound token, (b) a `SEND` row with no `result=`, (c) a ST
   state lost); these four rules lower the kill FREQUENCY. Neither guarantees zero kills. See memory
   [[harness-saturation-blocks-firing]].
 
+- **G-CEILING and G-PARK (2026-09-18; the two stop-side gates, mechanized from the recurring scoring
+  lessons so they stop recurring):** both run through `attempts.py check`, both are mode-blind, and both
+  are about how a session is allowed to STOP working a cell.
+  (a) G-CEILING: `check ceiling` always exits 1. The ceiling vocabulary is banned outright, because a
+  ceiling is a property of the levers tried, not of the target. The legal sentence is "my current levers
+  cap at N, others are higher, so a better lever exists" - the gap between the two numbers is the seam
+  to work, so the claim has no gate-legal form to write.
+  (b) G-PARK: `check park --challenge C --behavior B` exits 0 only when BOTH hold - at least 8
+  mechanically-distinct levers have been fired at that cell (DISTINCT lever over active rows), and a
+  community-meta check is on file for it, recorded with `attempts.py note --key meta`. Miss either and
+  the gate names what is still missing and exits 1. Parking under 8 levers is a search failure, not a
+  verdict; parking without the meta check means parking without knowing what others already cleared.
+  The `meta` key is a new member of the `STATUS_KEYS` vocabulary, and the floor is `MIN_DISTINCT_LEVERS`
+  in `attempts.py`. Same shape as every other gate here - a lesson that is enforced rather than
+  remembered.
+
 ## 3. ADVERSARIAL SELF-REVIEW - triggered, not random
 Run the 5-lens review (epistemics, tradecraft, scorer/guard model, research-validation, system
 architecture) when ANY trigger fires:

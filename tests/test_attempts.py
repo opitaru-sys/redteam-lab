@@ -492,6 +492,62 @@ class AttemptsTest(unittest.TestCase):
         out = self._run("brief", "--challenge", "grayswan")
         self.assertFalse(out.startswith("COMPETE MODE:"))
 
+    def test_park_requires_distinct_levers_and_meta_check(self):
+        conn = attempts.connect()
+        self.addCleanup(conn.close)
+        with conn:
+            for i in range(8):
+                attempts.add_attempt(conn, {
+                    "challenge": "grayswan", "behavior": "hard", "model": "M1",
+                    "lever": f"L{i}", "result": "block", "refusal_class": "note-and-skip",
+                    "next_move": "change-family"})
+            code_no, _ = attempts.check_verdict(conn, "park", "grayswan", behavior="hard")
+            attempts.upsert_cell_status(conn, {
+                "challenge": "grayswan", "behavior": "hard", "key": "meta",
+                "value": "checked leaderboard + community meta"})
+            code_yes, msg = attempts.check_verdict(conn, "park", "grayswan", behavior="hard")
+        self.assertEqual(code_no, 1)    # 8 levers but no meta check yet
+        self.assertEqual(code_yes, 0)   # levers + meta => park is legal
+        self.assertIn("PARK OK", msg)
+        ceil_code, ceil_msg = attempts.check_verdict(conn, "ceiling", "grayswan", behavior="hard")
+        self.assertEqual(ceil_code, 1)
+        self.assertIn("never state a ceiling", ceil_msg)
+
+    def test_park_refused_below_the_distinct_lever_floor(self):
+        # The good case above has 8 distinct levers; this is the bad case. Seven distinct levers
+        # plus a meta note must still refuse, and the message must name what is missing.
+        conn = attempts.connect()
+        self.addCleanup(conn.close)
+        with conn:
+            for i in range(7):
+                attempts.add_attempt(conn, {
+                    "challenge": "grayswan", "behavior": "thin", "model": "M1",
+                    "lever": f"L{i}", "result": "block", "refusal_class": "note-and-skip",
+                    "next_move": "change-family"})
+            attempts.upsert_cell_status(conn, {
+                "challenge": "grayswan", "behavior": "thin", "key": "meta",
+                "value": "checked leaderboard + community meta"})
+            code, msg = attempts.check_verdict(conn, "park", "grayswan", behavior="thin")
+        self.assertEqual(code, 1)
+        self.assertIn("do NOT park", msg)
+        self.assertIn("1 more distinct lever", msg)
+
+    def test_park_and_ceiling_are_reachable_from_the_cli(self):
+        # Both new claims must be valid `check` choices, not argparse errors.
+        with self.assertRaises(SystemExit) as cm:
+            self._run("check", "ceiling", "--challenge", "grayswan", "--behavior", "hard")
+        self.assertEqual(cm.exception.code, 1)
+        with self.assertRaises(SystemExit) as cm:
+            self._run("check", "park", "--challenge", "grayswan", "--behavior", "hard")
+        self.assertEqual(cm.exception.code, 1)   # empty cell: no levers, no meta note
+
+    def test_park_requires_behavior_on_the_cli(self):
+        # park is a per-cell claim, so cmd_check must demand --behavior with its own specific
+        # message rather than argparse rejecting the claim name itself.
+        with self.assertRaises(SystemExit) as cm:
+            self._run("check", "park", "--challenge", "grayswan")
+        self.assertIn("requires --behavior", str(cm.exception.code))
+
     def test_hazard_hunt_aliases_are_public_ctf(self):
         self._run("add", "--challenge", "grayswan-hazard-hunt", "--behavior", "misc",
                   "--model", "m", "--result", "block",
