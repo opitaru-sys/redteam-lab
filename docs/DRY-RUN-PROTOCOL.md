@@ -55,16 +55,16 @@ wrong thing, stop and fix before Layer 2.
       Pass: normal mode holds the cell open, compete mode banks the first judged break and prints
       COMPETE. Confirm a judge-artifact-only win is NOT banked (compete excludes those).
 
-- [ ] **The two new enforced gates fire.** Run `check` for the two claims those gates guard and
-      confirm each prints its verdict rather than passing silently. The exact gate names and claims
-      live in the CLAUDE.md gate table; the task that added them was not in the reports read for this
-      protocol, so the owner fills the two claim names here before running:
+- [ ] **The two new enforced gates fire.** The two gates added by the build are `ceiling` and
+      `park` (the recurring-scoring-lesson gates). Run `check` for each and confirm it prints its
+      verdict rather than passing silently:
       ```
-      python attempts.py check <claim-1> --challenge <c> --behavior <b>
-      python attempts.py check <claim-2> --challenge <c> --behavior <b>
+      python attempts.py check ceiling --challenge <c> --behavior <b>
+      python attempts.py check park --challenge <c> --behavior <b>
       ```
-      Pass: each gate returns its expected verdict line. This step needs the owner to confirm the two
-      gate names from the gate table.
+      Pass: each gate returns its expected verdict line. If either name errors, confirm the exact
+      claim string against the CLAUDE.md gate table (the gate rows for these two are a deferred
+      cleanup item and may not be listed yet).
 
 - [ ] **Coverage recommender excludes closed cells.** The command is `coverage` with a required
       `--challenge`. It ranks winning levers against still-open cells and filters out closed channels
