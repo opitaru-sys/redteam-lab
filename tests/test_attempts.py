@@ -126,6 +126,46 @@ class AttemptsTest(unittest.TestCase):
         self.assertIn("0 inserted", out)
         self.assertIn("1 skipped", out)
 
+    def test_load_is_idempotent_with_conversation_fields(self):
+        # Regression: _row_signature carries conversation_id/turn_index, but cmd_load's
+        # `seen` query used to omit both columns, so a record with these fields set could
+        # never match an already-loaded row and reloading the same file duplicated it.
+        recs = [{"challenge": "grayswan", "behavior": "b", "model": "m", "result": "win",
+                 "refusal_class": "win", "next_move": "done",
+                 "ts": "2026-08-20T10:00:00+00:00",
+                 "conversation_id": "c-1", "turn_index": 0}]
+        path = self._seed(recs)
+        self._run("load", path)
+        out = self._run("load", path)  # second load must skip, not double-count
+        self.assertIn("0 inserted", out)
+        self.assertIn("1 skipped", out)
+
+    def test_load_rejects_non_numeric_turn_index(self):
+        path = self._seed([
+            {"challenge": "grayswan", "behavior": "b", "model": "m", "result": "win",
+             "refusal_class": "win", "next_move": "done",
+             "ts": "2026-08-20T10:00:00+00:00", "notes": "good"},
+            {"challenge": "grayswan", "behavior": "b", "model": "m", "result": "win",
+             "refusal_class": "win", "next_move": "done",
+             "ts": "2026-08-20T10:00:01+00:00", "turn_index": "not-a-number"},
+        ])
+        out = self._run("load", path)
+        self.assertIn("1 inserted", out)
+        self.assertIn("1 failed", out)
+
+    def test_load_rejects_non_numeric_latency_ms(self):
+        path = self._seed([
+            {"challenge": "grayswan", "behavior": "b", "model": "m", "result": "win",
+             "refusal_class": "win", "next_move": "done",
+             "ts": "2026-08-20T10:00:00+00:00", "notes": "good"},
+            {"challenge": "grayswan", "behavior": "b", "model": "m", "result": "win",
+             "refusal_class": "win", "next_move": "done",
+             "ts": "2026-08-20T10:00:01+00:00", "latency_ms": "fast"},
+        ])
+        out = self._run("load", path)
+        self.assertIn("1 inserted", out)
+        self.assertIn("1 failed", out)
+
     def test_load_bad_row_does_not_sink_the_batch(self):
         path = self._seed([
             {"challenge": "grayswan", "behavior": "b", "model": "m", "result": "block",
@@ -602,12 +642,103 @@ class AttemptsTest(unittest.TestCase):
         self.assertEqual(row["latency_ms"], 1500.0)
 
     def test_migrate_is_idempotent_for_new_columns(self):
-        with attempts.connect() as conn:
-            attempts._migrate(conn)
-            attempts._migrate(conn)
-            cols = {r[1] for r in conn.execute("PRAGMA table_info(attempts)")}
+        # Real migration test: start from an UNMIGRATED database (the pre-Task-2 column
+        # set, built with raw sqlite3 so attempts.connect()'s automatic _migrate call is
+        # never involved until we explicitly trigger it), with a legacy row already in it.
+        import sqlite3
+        raw = sqlite3.connect(attempts.DB_PATH)
+        raw.execute("DROP TABLE attempts")
+        raw.execute("""
+            CREATE TABLE attempts (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts            TEXT NOT NULL,
+                challenge     TEXT NOT NULL,
+                wave          TEXT,
+                behavior      TEXT NOT NULL,
+                model         TEXT NOT NULL,
+                lever         TEXT,
+                result        TEXT NOT NULL,
+                score         TEXT,
+                score_num     REAL,
+                pred_guard    TEXT,
+                pred_score    TEXT,
+                payload       TEXT,
+                notes         TEXT,
+                refusal_class TEXT,
+                next_move     TEXT,
+                oracle_type   TEXT,
+                status        TEXT NOT NULL DEFAULT 'active',
+                superseded_by INTEGER,
+                closed_reason TEXT
+            )
+        """)
+        raw.execute(
+            "INSERT INTO attempts (ts, challenge, behavior, model, result, status) "
+            "VALUES (?,?,?,?,?,?)",
+            ("2026-08-01T00:00:00+00:00", "grayswan", "legacy-behavior", "m1", "block", "active"))
+        raw.commit()
+        cols_before = {r[1] for r in raw.execute("PRAGMA table_info(attempts)")}
+        raw.close()
+        for c in ("conversation_id", "turn_index", "turn_goal", "latency_ms"):
+            self.assertNotIn(c, cols_before)  # confirms the fixture is genuinely unmigrated
+
+        conn = attempts.connect()  # this call runs _migrate once, ALTERing the columns in
+        try:
+            attempts._migrate(conn)  # second explicit run: must be a no-op, no error
+            cols_after = {r[1] for r in conn.execute("PRAGMA table_info(attempts)")}
+            row = conn.execute(
+                "SELECT behavior, model, result, conversation_id, turn_index, turn_goal, "
+                "latency_ms FROM attempts WHERE behavior='legacy-behavior'").fetchone()
+        finally:
+            conn.close()
+
+        for c in ("conversation_id", "turn_index", "turn_goal", "latency_ms"):
+            self.assertIn(c, cols_after)
+        self.assertEqual(row["behavior"], "legacy-behavior")
+        self.assertEqual(row["model"], "m1")
+        self.assertEqual(row["result"], "block")
+        self.assertIsNone(row["conversation_id"])
+        self.assertIsNone(row["turn_index"])
+        self.assertIsNone(row["turn_goal"])
+        self.assertIsNone(row["latency_ms"])
+
+    def test_init_creates_new_conversation_columns_immediately(self):
+        # Regression: SCHEMA's CREATE TABLE body must list the four new columns itself.
+        # cmd_init's connect() finds no attempts table yet, so _migrate returns early and
+        # only SCHEMA's executescript shapes the table; a later connect() call would
+        # self-heal via _migrate, masking the gap. Check right after init, via a bare
+        # sqlite3 connection (no attempts.connect(), so no implicit _migrate).
+        fresh_path = os.path.join(self.tmp, "fresh.db")
+        orig_path = attempts.DB_PATH
+        attempts.DB_PATH = fresh_path
+        try:
+            self._run("init")
+        finally:
+            attempts.DB_PATH = orig_path
+        import sqlite3
+        raw = sqlite3.connect(fresh_path)
+        cols = {r[1] for r in raw.execute("PRAGMA table_info(attempts)")}
+        raw.close()
         for c in ("conversation_id", "turn_index", "turn_goal", "latency_ms"):
             self.assertIn(c, cols)
+
+    def test_add_attempt_rejects_non_numeric_turn_index_and_latency(self):
+        conn = attempts.connect()
+        try:
+            with self.assertRaises(ValueError):
+                attempts.add_attempt(conn, {
+                    "challenge": "grayswan", "behavior": "b1", "model": "m1",
+                    "result": "win", "refusal_class": "win", "next_move": "done",
+                    "turn_index": "three",
+                })
+            with self.assertRaises(ValueError):
+                attempts.add_attempt(conn, {
+                    "challenge": "grayswan", "behavior": "b1", "model": "m1",
+                    "result": "win", "refusal_class": "win", "next_move": "done",
+                    "latency_ms": "fast",
+                })
+        finally:
+            conn.close()
 
 
 if __name__ == "__main__":

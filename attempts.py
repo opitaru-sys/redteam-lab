@@ -215,6 +215,10 @@ CREATE TABLE IF NOT EXISTS attempts (
     refusal_class TEXT,
     next_move     TEXT,
     oracle_type   TEXT,
+    conversation_id TEXT,
+    turn_index    INTEGER,
+    turn_goal     TEXT,
+    latency_ms    REAL,
     status        TEXT NOT NULL DEFAULT 'active',
     superseded_by INTEGER,
     closed_reason TEXT
@@ -381,6 +385,12 @@ def add_attempt(conn: sqlite3.Connection, rec: dict) -> int:
     nm = rec.get("next_move")
     if nm is not None and nm not in NEXT_MOVES:
         raise ValueError(f"next_move must be one of {NEXT_MOVES}, got {nm!r}")
+    ti = rec.get("turn_index")
+    if ti is not None and not isinstance(ti, int):
+        raise ValueError(f"turn_index must be an int, got {ti!r}")
+    lm = rec.get("latency_ms")
+    if lm is not None and not isinstance(lm, (int, float)):
+        raise ValueError(f"latency_ms must be a number (int or float), got {lm!r}")
     cur = conn.execute(
         """INSERT INTO attempts
            (ts, challenge, wave, behavior, model, lever, result, score, score_num,
@@ -508,7 +518,8 @@ def cmd_load(args: argparse.Namespace) -> None:
         # Load existing signatures once for idempotency.
         seen = {
             _row_signature(dict(r)) for r in conn.execute(
-                "SELECT challenge, behavior, model, lever, result, score, notes FROM attempts")
+                "SELECT challenge, behavior, model, lever, result, score, notes, "
+                "conversation_id, turn_index FROM attempts")
         }
         for i, rec in enumerate(rows):
             sig = _row_signature(rec)
