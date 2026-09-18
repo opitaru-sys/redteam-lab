@@ -1364,15 +1364,68 @@ class AttemptsTest(unittest.TestCase):
 
     def test_acquire_reraises_non_lock_operational_error(self):
         # A non-lock OperationalError (a genuine SQL or schema fault) must propagate,
-        # never be masked as "not acquired".
+        # never be masked as "not acquired". The error is raised by sqlite3 itself so it
+        # carries the real error code the discrimination now reads, not a hand-built message.
         import sqlite3
+
+        raised = []
+
+        def real_missing_table_error():
+            scratch = sqlite3.connect(":memory:")
+            try:
+                scratch.execute("INSERT INTO claims (challenge) VALUES ('x')")
+            except sqlite3.OperationalError as exc:
+                raised.append(exc)
+            finally:
+                scratch.close()
+            return raised[0]
+
+        err = real_missing_table_error()
+        self.assertEqual(getattr(err, "sqlite_errorname", None), "SQLITE_ERROR")
 
         class Boom:
             def execute(self, *a, **k):
-                raise sqlite3.OperationalError("no such table: claims")
+                raise err
 
         with self.assertRaises(sqlite3.OperationalError):
             attempts.claim_acquire(Boom(), "grayswan", "b1", "w1", "t1")
+
+    def test_busy_or_locked_discriminates_on_error_code_not_message(self):
+        # The busy/locked check reads the sqlite3 error code, so an error whose TEXT says
+        # nothing about locking still reads as contention, and an error whose text happens to
+        # contain "lock" but carries a fault code still reads as a fault.
+        import sqlite3
+
+        busy = sqlite3.OperationalError("database is busy")
+        busy.sqlite_errorcode = sqlite3.SQLITE_BUSY
+        busy.sqlite_errorname = "SQLITE_BUSY"
+        self.assertTrue(attempts._is_busy_or_locked(busy))
+
+        extended = sqlite3.OperationalError("snapshot conflict")
+        extended.sqlite_errorcode = sqlite3.SQLITE_BUSY_SNAPSHOT
+        extended.sqlite_errorname = "SQLITE_BUSY_SNAPSHOT"
+        self.assertTrue(attempts._is_busy_or_locked(extended))
+
+        shared = sqlite3.OperationalError("shared cache conflict")
+        shared.sqlite_errorcode = sqlite3.SQLITE_LOCKED_SHAREDCACHE
+        shared.sqlite_errorname = "SQLITE_LOCKED_SHAREDCACHE"
+        self.assertTrue(attempts._is_busy_or_locked(shared))
+
+        misleading = sqlite3.OperationalError('no such column: lock')
+        misleading.sqlite_errorcode = sqlite3.SQLITE_ERROR
+        misleading.sqlite_errorname = "SQLITE_ERROR"
+        self.assertFalse(attempts._is_busy_or_locked(misleading))
+
+    def test_busy_or_locked_falls_back_to_message_without_error_code(self):
+        # On an interpreter too old to set sqlite_errorcode the message check still decides.
+        import sqlite3
+
+        legacy_busy = sqlite3.OperationalError("database is locked")
+        self.assertIsNone(getattr(legacy_busy, "sqlite_errorcode", None))
+        self.assertTrue(attempts._is_busy_or_locked(legacy_busy))
+
+        legacy_fault = sqlite3.OperationalError("no such table: claims")
+        self.assertFalse(attempts._is_busy_or_locked(legacy_fault))
 
     def test_ingest_cli_rejects_bad_capture(self):
         # A capture whose timing is inverted is rejected whole; nothing is inserted.

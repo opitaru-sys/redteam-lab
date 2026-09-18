@@ -330,10 +330,29 @@ def claim_acquire(conn, challenge, behavior, worker_id, tab_id=None):
         # A write-lock timeout (busy/locked database) means the same as losing the race:
         # the claim was not acquired. Return None so a parallel worker never crashes on it.
         # Any other OperationalError (a real SQL or schema fault) is re-raised, not masked.
-        msg = str(exc).lower()
-        if "lock" in msg or "busy" in msg:
+        if _is_busy_or_locked(exc):
             return None
         raise
+
+
+def _is_busy_or_locked(exc: sqlite3.Error) -> bool:
+    """True when an sqlite3 error is a busy/locked contention error rather than a real fault.
+
+    Discriminates on the sqlite3 error code, not on the message text, so a wording change in
+    SQLite or a localized build cannot flip the branch. `sqlite_errorcode` carries the primary
+    result code and `sqlite_errorname` the extended one (SQLITE_BUSY_SNAPSHOT,
+    SQLITE_LOCKED_SHAREDCACHE and friends), so both are checked. Both attributes exist only on
+    errors raised by the sqlite3 module on Python 3.11+; when neither is present (an older
+    interpreter, or an error object built by hand) fall back to the message substring check.
+    """
+    code = getattr(exc, "sqlite_errorcode", None)
+    if code is not None:
+        if code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+            return True
+        name = getattr(exc, "sqlite_errorname", "") or ""
+        return name.startswith("SQLITE_BUSY") or name.startswith("SQLITE_LOCKED")
+    msg = str(exc).lower()
+    return "lock" in msg or "busy" in msg
 
 
 def claim_release(conn, claim_id):

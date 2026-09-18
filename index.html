@@ -154,8 +154,8 @@
   .row-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:11px}
   details.more>summary{cursor:pointer;font-size:12px;color:var(--fg-faint);list-style:none;margin-top:10px}
   details.more>summary::-webkit-details-marker{display:none}
-  details.more>summary::before{content:"â–¸ reference (defense, source) "}
-  details.more[open]>summary::before{content:"â–¾ reference "}
+  details.more>summary::before{content:"▸ reference (defense, source) "}
+  details.more[open]>summary::before{content:"▾ reference "}
 
   table{width:100%;border-collapse:collapse;font-size:13px}
   th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line-soft);vertical-align:top}
@@ -2939,7 +2939,7 @@ function renderLog(){
     rows.slice(0,120).map(a=>{
       const r=routeOf(a.outcome), open=openRow===a.id;
       return `<tr class="logrow${open?" open":""}" data-row="${esc(a.id)}">
-        <td style="font-family:var(--mono);font-size:12px;color:var(--fg-faint)">${open?"â–¾":"â–¸"} ${a.k||""}</td>
+        <td style="font-family:var(--mono);font-size:12px;color:var(--fg-faint)">${open?"▾":"▸"} ${a.k||""}</td>
         <td style="white-space:nowrap"><span class="dot ${esc(a.outcome)}"></span>${esc(r?r.label:String(a.outcome).replace(/_/g," "))}</td>
         <td class="trunc" title="${esc(a.prompt)}">${esc(a.prompt)}</td></tr>`
         +(open?rowDetail(a):"");
@@ -3031,7 +3031,7 @@ function renderDrillItem(){
   $("#drillCard").innerHTML=`
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
       <span class="tag">${esc(DRILL_CAT_LABEL[it.category]||it.category)}</span>
-      <span class="tag" title="difficulty">${"â—".repeat(it.difficulty||1)}${"â—‹".repeat(3-(it.difficulty||1))}</span>
+      <span class="tag" title="difficulty">${"●".repeat(it.difficulty||1)}${"○".repeat(3-(it.difficulty||1))}</span>
     </div>
     <p style="margin:0 0 10px;color:var(--fg-dim);font-size:13px">${glossify(esc(it.setup))}</p>
     <pre class="tpl" style="max-height:none">${esc(it.stimulus)}</pre>
