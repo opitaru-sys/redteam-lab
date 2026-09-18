@@ -1326,25 +1326,47 @@ def _propagate_lever(conn, lever, clause, params):
             print(f"    {beh} ({fires} fires, last={last_rc})")
 
 
+def _closed_behaviors(conn, challenge) -> set[str]:
+    """Behaviors the closed-channel gate reports CLOSED-CHANNEL: 0 wins with >=30 active
+    non-scope_out fires, minus operator reopen overrides. This is the same definition `open`
+    (cmd_open) and `check closed` (_verdict_closed) apply, so a caller that excludes these can
+    never propose a cell the rest of the tool treats as closed."""
+    ch = canon_challenge(challenge) if challenge else None
+    where = " AND challenge=?" if ch else ""
+    params = (ch,) if ch else ()
+    rows = conn.execute(
+        f"SELECT behavior FROM attempts "
+        f"WHERE status='active' AND result!='scope_out'{where} "
+        f"GROUP BY behavior "
+        f"HAVING SUM(CASE WHEN result='win' THEN 1 ELSE 0 END)=0 AND COUNT(*)>=30",
+        params).fetchall()
+    reopened = _reopened_behaviors(conn, ch)
+    return {r["behavior"] for r in rows if r["behavior"] not in reopened}
+
+
 def _coverage_rows(conn, challenge):
     """Every (winning lever) x (still-open cell) pair the lever has NOT yet been fired at.
 
-    A cell is open when it has at least one active, non-scope_out row and zero wins.
-    A lever is a winner when it has at least one active win in this challenge. Rows are
-    ranked by the lever's total wins (desc) then the cell's prior fires (asc), so the most
-    proven lever spreads to its least-explored open cells first. Legacy NULL-lever rows never
-    count as a winner nor block a cell (the lever IS NOT NULL guard)."""
+    A cell is open when it has at least one active, non-scope_out row and zero wins, and its
+    behavior is NOT closed by the closed-channel gate (see _closed_behaviors), so coverage
+    never proposes a cell `open` / `check closed` report closed. A lever is a winner when it
+    has at least one active win in this challenge. Rows are ranked by the lever's total wins
+    (desc), then the cell's prior fires (asc), then behavior, model, and lever name (asc) as a
+    deterministic tiebreak. Legacy NULL-lever rows never count as a winner nor block a cell
+    (the lever IS NOT NULL guard)."""
     ch = canon_challenge(challenge)
     winners = conn.execute(
         "SELECT lever, COUNT(*) wins FROM attempts "
         "WHERE status='active' AND result='win' AND lever IS NOT NULL AND challenge=? "
         "GROUP BY lever ORDER BY wins DESC", (ch,)).fetchall()
     wins_by_lever = {w["lever"]: w["wins"] for w in winners}
-    open_cells = conn.execute(
+    closed = _closed_behaviors(conn, ch)
+    open_cells = [c for c in conn.execute(
         "SELECT behavior, model, COUNT(*) fires FROM attempts "
         "WHERE status='active' AND result!='scope_out' AND challenge=? "
         "GROUP BY behavior, model "
-        "HAVING SUM(CASE WHEN result='win' THEN 1 ELSE 0 END)=0", (ch,)).fetchall()
+        "HAVING SUM(CASE WHEN result='win' THEN 1 ELSE 0 END)=0", (ch,))
+        if c["behavior"] not in closed]
     fired = {(r["lever"], r["behavior"], r["model"]) for r in conn.execute(
         "SELECT DISTINCT lever, behavior, model FROM attempts "
         "WHERE status='active' AND lever IS NOT NULL AND challenge=?", (ch,))}
@@ -1355,7 +1377,8 @@ def _coverage_rows(conn, challenge):
             if key not in fired:
                 out.append({"lever": w["lever"], "behavior": c["behavior"],
                             "model": c["model"], "fires_here": c["fires"]})
-    out.sort(key=lambda r: (-wins_by_lever[r["lever"]], r["fires_here"]))
+    out.sort(key=lambda r: (-wins_by_lever[r["lever"]], r["fires_here"],
+                            r["behavior"], r["model"], r["lever"]))
     return out
 
 

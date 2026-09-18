@@ -1009,6 +1009,53 @@ class AttemptsTest(unittest.TestCase):
         self.assertIn("COVERAGE", brief)
         self.assertIn("Lx -> bopen / Mo", brief)
 
+    def test_coverage_excludes_closed_channel_behaviors(self):
+        # A behavior the closed-channel gate marks CLOSED (>=30 active non-scope_out fires,
+        # 0 wins, not reopened) must not be proposed, matching `open` and `check closed`.
+        with attempts.connect() as conn:
+            attempts.add_attempt(conn, {"challenge": "grayswan", "behavior": "bwin",
+                "model": "Mw", "lever": "Lx", "result": "win",
+                "refusal_class": "win", "next_move": "done"})
+            for i in range(30):
+                attempts.add_attempt(conn, {"challenge": "grayswan", "behavior": "bclosed",
+                    "model": f"M{i}", "result": "block",
+                    "refusal_class": "soft-refusal", "next_move": "reroll"})
+            rows = attempts._coverage_rows(conn, "grayswan")
+        self.assertNotIn("bclosed", {r["behavior"] for r in rows})
+
+    def test_coverage_reopen_override_restores_a_closed_behavior(self):
+        # An operator reopen override lifts the closed gate, so the recommender proposes the
+        # behavior's open cells again (the same override `open` / `check closed` honor).
+        with attempts.connect() as conn:
+            attempts.add_attempt(conn, {"challenge": "grayswan", "behavior": "bwin",
+                "model": "Mw", "lever": "Lx", "result": "win",
+                "refusal_class": "win", "next_move": "done"})
+            for i in range(30):
+                attempts.add_attempt(conn, {"challenge": "grayswan", "behavior": "breopen",
+                    "model": f"M{i}", "result": "block",
+                    "refusal_class": "soft-refusal", "next_move": "reroll"})
+            attempts.upsert_cell_status(conn, {"challenge": "grayswan", "behavior": "breopen",
+                "key": "reopen", "value": "operator override"})
+            rows = attempts._coverage_rows(conn, "grayswan")
+        self.assertIn("breopen", {r["behavior"] for r in rows})
+
+    def test_coverage_equal_wins_tiebreak_is_deterministic(self):
+        # Two levers with equal wins (1 each) both propose the SAME open cell with equal
+        # fires; the tiebreak orders them by lever name asc, independent of insert/DB order.
+        with attempts.connect() as conn:
+            attempts.add_attempt(conn, {"challenge": "grayswan", "behavior": "bw1",
+                "model": "Ma", "lever": "Zlever", "result": "win",
+                "refusal_class": "win", "next_move": "done"})
+            attempts.add_attempt(conn, {"challenge": "grayswan", "behavior": "bw2",
+                "model": "Mb", "lever": "Alever", "result": "win",
+                "refusal_class": "win", "next_move": "done"})
+            attempts.add_attempt(conn, {"challenge": "grayswan", "behavior": "bopen",
+                "model": "Mo", "result": "block",
+                "refusal_class": "soft-refusal", "next_move": "reroll"})
+            rows = attempts._coverage_rows(conn, "grayswan")
+        proposed = [r["lever"] for r in rows if (r["behavior"], r["model"]) == ("bopen", "Mo")]
+        self.assertEqual(proposed, ["Alever", "Zlever"])
+
 
 if __name__ == "__main__":
     unittest.main()
