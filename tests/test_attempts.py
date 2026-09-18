@@ -456,29 +456,31 @@ class AttemptsTest(unittest.TestCase):
         self.assertEqual(code_real, 0)       # a real-effect (counting) win still banks
         self.assertIn("COMPETE", msg_real)
 
-    def test_compete_mode_applies_to_safe_gnull_claim(self):
-        # The gate table's COMPETE MODE row lists G-SOLVE and G-NULL. G-SOLVE is the "solved"
-        # claim (covered above); G-NULL is the "safe" claim. In compete mode a null read (0
-        # wins) becomes gate-legal on the first try, deferring the full rule-of-three batch.
+    def test_compete_mode_does_not_relax_safe_claim(self):
+        # N1: compete mode must not bank a safety claim early. The brief scopes the deferral to
+        # the "solved" claim only, so "safe" (G-NULL) runs byte-identical logic in both modes,
+        # including the positive-control statement (a blind null must not lose its warning).
         self._mkfire("nullbehavior", "m0", "block")
         conn = attempts.connect()
         self.addCleanup(conn.close)
-        code_n, msg_n = attempts.check_verdict(conn, "safe", "grayswan",
-                                               behavior="nullbehavior", mode="normal")
-        code_c, msg_c = attempts.check_verdict(conn, "safe", "grayswan",
-                                               behavior="nullbehavior", mode="compete")
-        self.assertEqual(code_n, 1)
-        self.assertIn("UNMEASURED", msg_n)
-        self.assertEqual(code_c, 0)
-        self.assertIn("COMPETE", msg_c)
+        normal = attempts.check_verdict(conn, "safe", "grayswan",
+                                        behavior="nullbehavior", mode="normal")
+        compete = attempts.check_verdict(conn, "safe", "grayswan",
+                                         behavior="nullbehavior", mode="compete")
+        self.assertEqual(normal, compete)
+        self.assertEqual(normal[0], 1)   # never gate-legal, mode or no mode
+        self.assertIn("UNMEASURED", normal[1])
+        self.assertIn("positive control", normal[1])
+        self.assertIn("ABSENT", normal[1])   # no win logged yet -> control absent, null may be blind
 
     def test_compete_mode_does_not_affect_durable_closed_wall(self):
-        # The gate table row scopes the deferral to G-SOLVE/G-NULL only; durable, closed and
-        # wall must return byte-identical verdicts regardless of mode.
+        # The gate table row scopes the deferral to the "solved" claim (G-SOLVE) only; durable,
+        # safe, closed, and wall must all return byte-identical verdicts regardless of mode.
         conn = attempts.connect()
         self.addCleanup(conn.close)
         for claim, kwargs in (
             ("durable", {"lever": "nolever"}),
+            ("safe", {"behavior": "noclosedbehavior"}),
             ("closed", {"behavior": "noclosedbehavior"}),
             ("wall", {}),
         ):
