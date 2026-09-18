@@ -709,11 +709,25 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     with open(args.file, "r", encoding="utf-8") as fh:
         doc = json.load(fh)
     recs = parse_submit_stream(doc)
+    added = skipped = 0
     with connect() as conn:
+        # Load existing signatures once so re-ingesting the same capture (after a crash or
+        # worker reassignment) does not double-log rows. Same de-dup mechanism as cmd_load.
+        seen = {
+            _row_signature(dict(r)) for r in conn.execute(
+                "SELECT challenge, behavior, model, lever, result, score, notes, "
+                "conversation_id, turn_index FROM attempts")
+        }
         for rec in recs:
+            sig = _row_signature(rec)
+            if sig in seen:
+                skipped += 1
+                continue
             add_attempt(conn, rec)
+            seen.add(sig)
+            added += 1
     _do_export(quiet=True)
-    print(f"ingested {len(recs)} row(s) from {args.file}")
+    print(f"ingested {added} row(s) from {args.file} ({skipped} skipped, already present)")
 
 
 def _active_filter(args: argparse.Namespace) -> tuple[str, list]:

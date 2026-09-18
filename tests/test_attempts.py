@@ -1157,6 +1157,41 @@ class AttemptsTest(unittest.TestCase):
         self.assertEqual(rows["Cod"]["result"], "block")
         self.assertEqual(rows["Cod"]["latency_ms"], 2500)
 
+    def test_ingest_is_idempotent_on_re_ingest(self):
+        # A crashed or reassigned worker may re-ingest the same capture file. Re-ingesting
+        # must not double-log rows, while a genuinely new turn still inserts.
+        doc = {"challenge": "grayswan", "wave": "W1", "behavior": "cpf",
+               "conversation_id": "conv-9", "turn_index": 1, "lever": "opening",
+               "first_prompt_ms": 1000, "submitted_ms": 3500,
+               "results": [{"model": "Eel", "broken": True, "score": 100},
+                           {"model": "Cod", "broken": False, "score": 0}]}
+        path = os.path.join(self.tmp, "capture.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh)
+
+        first = self._run("ingest", path)
+        self.assertIn("ingested 2 row(s)", first)
+        self.assertEqual(self._row_count(), 2)
+
+        second = self._run("ingest", path)  # same file again: nothing new
+        self.assertIn("ingested 0 row(s)", second)
+        self.assertEqual(self._row_count(), 2)
+
+        # A genuinely new result (next turn of the same conversation) still inserts.
+        doc["turn_index"] = 2
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh)
+        third = self._run("ingest", path)
+        self.assertIn("ingested 2 row(s)", third)
+        self.assertEqual(self._row_count(), 4)
+
+    def _row_count(self):
+        conn = attempts.connect()
+        try:
+            return conn.execute("SELECT COUNT(*) AS n FROM attempts").fetchone()["n"]
+        finally:
+            conn.close()
+
     # --- Task 10: atomic target claim with tab binding ----------------------
     def test_claim_is_atomic_and_releasable(self):
         with attempts.connect() as conn:
