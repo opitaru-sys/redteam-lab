@@ -744,18 +744,37 @@ class AttemptsTest(unittest.TestCase):
 
     def test_brief_lists_conversation_turns(self):
         with attempts.connect() as conn:
-            for ti, res, rc in [(0, "block", "soft-refusal"), (1, "win", "win")]:
+            attempts.add_attempt(conn, {
+                "challenge": "grayswan", "behavior": "b1", "model": "M1",
+                "result": "block", "refusal_class": "soft-refusal", "next_move": "done",
+                "conversation_id": "conv-A", "turn_index": 0})
+            attempts.add_attempt(conn, {
+                "challenge": "grayswan", "behavior": "b1", "model": "M1",
+                "result": "win", "refusal_class": "win", "next_move": "done",
+                "conversation_id": "conv-A", "turn_index": 1, "score": 100})
+            # A second conversation with no winning turn at all: the marker must
+            # never appear anywhere in its block.
+            for ti in (0, 1):
                 attempts.add_attempt(conn, {
                     "challenge": "grayswan", "behavior": "b1", "model": "M1",
-                    "result": res, "refusal_class": rc, "next_move": "done",
-                    "conversation_id": "conv-A", "turn_index": ti})
+                    "result": "block", "refusal_class": "soft-refusal", "next_move": "done",
+                    "conversation_id": "conv-B", "turn_index": ti})
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             attempts.cmd_brief(argparse.Namespace(challenge="grayswan", wave=None))
         text = out.getvalue()
         self.assertIn("CONVERSATIONS", text)
         self.assertIn("conv-A", text)
-        self.assertIn("turn 1", text)
+        self.assertIn("conv-B", text)
+        # Winning turn: marked, and the score field formatted per the brief.
+        self.assertIn("* turn 1: win score=100", text)
+        # Non-winning turn in the same conversation: unmarked, and a NULL score
+        # falls back to "-".
+        self.assertIn("turn 0: soft-refusal score=-", text)
+        self.assertNotIn("* turn 0", text)
+        # conv-B has no winning turn: the marker never appears in its block.
+        conv_b_block = text[text.index("conv-B"):]
+        self.assertNotIn("*", conv_b_block)
 
 
 if __name__ == "__main__":

@@ -811,6 +811,24 @@ def _conversation_rows(conn, clause, params):
         f"ORDER BY conversation_id, turn_index", params).fetchall()
 
 
+def _print_conversations(convos) -> None:
+    # Build the lines first (pure), then print them, so the formatting logic
+    # stays testable independent of stdout.
+    lines = ["\nCONVERSATIONS (multi-turn attempts, turn order; * = winning turn):"]
+    if not convos:
+        lines.append("  (none logged)")
+    current = None
+    for r in convos:
+        if r["conversation_id"] != current:
+            current = r["conversation_id"]
+            lines.append(f"  {current} [{r['behavior']} / {r['model']}]")
+        mark = "*" if r["result"] == "win" else " "
+        sc = f"{r['score_num']:.0f}" if r["score_num"] is not None else "-"
+        lines.append(f"    {mark} turn {r['turn_index']}: {r['refusal_class'] or '-'} score={sc}")
+    for line in lines:
+        print(line)
+
+
 def cmd_brief(args: argparse.Namespace) -> None:
     """Reconstruct the actionable session STATE from the ledger, payload-free. This is what a
     fresh session reads INSTEAD of the PROGRESS.md RESUME prose (source of truth = the DB)."""
@@ -919,17 +937,7 @@ def cmd_brief(args: argparse.Namespace) -> None:
     for r in cs:
         print(f"  {r['behavior']:<28} {r['model'] or '(all)':<20} {r['key']}={r['value']}")
 
-    print("\nCONVERSATIONS (multi-turn attempts, turn order; * = winning turn):")
-    if not convos:
-        print("  (none logged)")
-    current = None
-    for r in convos:
-        if r["conversation_id"] != current:
-            current = r["conversation_id"]
-            print(f"  {current} [{r['behavior']} / {r['model']}]")
-        mark = "*" if r["result"] == "win" else " "
-        sc = f"{r['score_num']:.0f}" if r["score_num"] is not None else "-"
-        print(f"    {mark} turn {r['turn_index']}: {r['refusal_class'] or '-'} score={sc}")
+    _print_conversations(convos)
 
 
 def cmd_supersede(args: argparse.Namespace) -> None:
