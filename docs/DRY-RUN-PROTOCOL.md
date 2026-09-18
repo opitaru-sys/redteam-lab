@@ -25,13 +25,13 @@ whether the swarm breaks more distinct targets per hour than the owner's pre-bui
 Tick every box. Each step names the exact command from the build. If a step errors or prints the
 wrong thing, stop and fix before Layer 2.
 
-- [ ] **Full suite is green first.** The current suite is 99 tests plus 6 probes. Run both and
+- [ ] **Full suite is green first.** The current suite is 102 tests plus 6 probes. Run both and
       confirm the counts before anything else.
       ```
       python -m unittest discover -s tests
       python -m unittest discover -s probes
       ```
-      Expect `Ran 99 tests ... OK` and `Ran 6 tests ... OK`. A lower count means a file did not load.
+      Expect `Ran 102 tests ... OK` and `Ran 6 tests ... OK`. A lower count means a file did not load.
 
 - [ ] **Migration on the real ledger.** Migration runs automatically when any command opens the
       ledger through `connect()` (this is where `_migrate` creates the `claims` table and its
@@ -48,8 +48,8 @@ wrong thing, stop and fix before Layer 2.
       the `check` and `brief` subcommands. It is scoped to the `solved` claim only (G-SOLVE); every
       other claim ignores it. Show the difference on a cell that has exactly one counted break:
       ```
-      python attempts.py check solved --challenge <c> --behavior <b>                 # normal: exit 1 until certainty batch
-      python attempts.py check solved --challenge <c> --behavior <b> --mode compete  # compete: exit 0, message contains COMPETE
+      python attempts.py check solved --challenge <c> --lever <l>                 # normal: exit 1 until certainty batch
+      python attempts.py check solved --challenge <c> --lever <l> --mode compete  # compete: exit 0, message contains COMPETE
       python attempts.py brief --challenge <c> --mode compete                        # first line is the COMPETE MODE header
       ```
       Pass: normal mode holds the cell open, compete mode banks the first judged break and prints
@@ -59,7 +59,7 @@ wrong thing, stop and fix before Layer 2.
       `park` (the recurring-scoring-lesson gates). Run `check` for each and confirm it prints its
       verdict rather than passing silently:
       ```
-      python attempts.py check ceiling --challenge <c> --behavior <b>
+      python attempts.py check ceiling --challenge <c>
       python attempts.py check park --challenge <c> --behavior <b>
       ```
       Pass: each gate returns its expected verdict line. If either name errors, confirm the exact
@@ -94,6 +94,9 @@ wrong thing, stop and fix before Layer 2.
       python attempts.py claim reap --older-than 0        # reaps the claim, prints its id
       python attempts.py claim ls                         # the reaped cell is now free to reclaim
       ```
+      Timing note: timestamps have one-second resolution and the threshold test is strict, so
+      `--older-than 0` will not release a claim beaten in the same clock second. Wait at least one
+      second after the `beat` before the zero-threshold reap.
       Pass: a fresh claim survives a wide threshold and a zero threshold releases it, exactly once.
 
 - [ ] **Ingest lands a break with its latency.** Capture-ingest reads a JSON capture file and inserts
