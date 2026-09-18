@@ -17,6 +17,8 @@ Commands:
 Entry schema (fields the relay relies on):
   id, target, event_url, behavior, wave, models[], lever, target_signal,
   base64, arg, status, fired_batches[], notes
+  turns[]  optional turn-structured plan: [{turn_index, goal}] in process
+           language; carried through add/next unchanged, never payload text
 """
 import json, sys, os, argparse, datetime
 
@@ -96,6 +98,9 @@ def cmd_add(args):
             sys.exit(1)
         e.setdefault("fired_batches", [])
         e.setdefault("notes", "")
+        # a turn-structured plan is optional; carry it through untouched.
+        # goals inside are process labels (turn_index + goal), never payload text.
+        e.setdefault("turns", [])
         db["entries"].append(e)
         existing_ids.add(eid)
         added += 1

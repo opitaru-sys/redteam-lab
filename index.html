@@ -2427,6 +2427,35 @@ const DRILLS = [
   "correct": "b",
   "explanation": "Games are black box because they are built to be. Your employer's agent is grey box, and the spec tells you exactly where the seams are: which tools exist, what the allowlist misses, what the prompt tries to forbid. Read it first, then attack the gap between what it claims and what it does. That gap is the finding your security lead can act on.",
   "trap": "Option A sounds principled and is a real argument for a final validation pass. As an opening move it is just slower. An attacker with a week will map your tool surface anyway; you can read it in ten minutes and spend the saved time on the part that needs creativity."
+ },
+ {
+  "id": "compose-staged-turn-roles",
+  "category": "compose",
+  "difficulty": 2,
+  "setup": "You are on a multi-turn target where the autograder scores only the most recent turn. You have planned a staged escalation of four turns and are about to fire.",
+  "stimulus": "Your plan: turn 0 establishes a benign on-topic frame, turn 1 takes one small step up from what the model just granted, turn 2 settles the last precondition, turn 3 makes the full ask.",
+  "question": "From memory, what must each staged turn establish for this plan to hold?",
+  "options": [
+   {
+    "id": "split",
+    "label": "Every turn carries a piece of the scored ask, split evenly so no single turn looks complete"
+   },
+   {
+    "id": "setup-then-ask",
+    "label": "Each earlier turn establishes one setup piece the final ask depends on, and only the last turn carries the scored ask"
+   },
+   {
+    "id": "ask-first",
+    "label": "The first turn carries the ask, and later turns reinforce it in case the grader re-reads earlier turns"
+   },
+   {
+    "id": "order-free",
+    "label": "Turn order does not matter as long as the ask appears somewhere in the conversation"
+   }
+  ],
+  "correct": "setup-then-ask",
+  "explanation": "The grader scores the most recent turn, so the scored ask lives on the last turn and nowhere else. Every earlier turn has one job: establish one piece of context, precondition, or convention that the final ask leans on, so the last turn is a small step rather than a cold jump. One goal per turn, planned backward from the last turn, with the fewest setup turns that make it land.",
+  "trap": "The split option feels clever because spreading the ask hides it, but the autograder reads only one turn, so a split ask scores nothing on the turn that counts. Each setup turn should carry setup, not a fragment of the ask, or you spend turns and speed rank for no score."
  }
 ];
 const DRILL_CAT_LABEL = {classify:"Classify the outcome",layer:"Identify the defense layer","next-move":"Pick the next move",invariant:"Spot the invariant",compose:"Compose the attack"};
